@@ -41,5 +41,12 @@
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
   },
-  "packageManager": "pnpm@10.33.2"
+  "packageManager": "pnpm@10.33.2",
+  "dependencies": {
+    "@notionhq/client": "^5.20.0",
+    "fastify": "^5.8.5",
+    "ical-generator": "^10.2.0",
+    "yaml": "^2.8.4",
+    "zod": "^4.4.2"
+  }
 }

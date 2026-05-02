@@ -47,6 +47,8 @@ desktop.ini
 
 # Claude Code local state
 .claude/settings.local.json
+# Local PRP review/plan artifacts written by /code-review and friends
+.claude/PRPs/
 
 # Personal scaffolding artifacts (not part of public repo)
 Initial plan.md

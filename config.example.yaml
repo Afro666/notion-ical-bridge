@@ -1,0 +1,65 @@
+# notion-ical-bridge calendar configuration
+#
+# Copy this file to `config.yaml` and edit it for your databases.
+# `config.yaml` is gitignored — never commit your real database IDs.
+#
+# The schema is validated on startup. Most errors (missing fields,
+# typos in property names, malformed slugs) fail fast at boot with a
+# pointer to the offending field. Note: placeholder databaseId values
+# DO pass schema validation — a Notion lookup error will only surface
+# on the first subscriber request to that calendar.
+# See the README for a property-by-property walk-through.
+
+defaults:
+  # Fallback values applied to every calendar that doesn't override them.
+  # Calendar-level fields always win.
+  timezone: Europe/Amsterdam
+  cacheTtlSeconds: 300         # 5 minutes between upstream Notion fetches
+
+calendars:
+
+  # Example 1: a public, unprotected calendar.
+  # Anyone who knows the URL can subscribe.
+  - slug: events                # /^[a-z0-9-]+$/ — appears in the URL
+    databaseId: REPLACE_WITH_YOUR_NOTION_DATABASE_ID
+    name: Public Events         # shown on the landing page
+    description: Community events, open to all
+    public: true                # listed on the / landing page
+    dateProperty: Date          # MUST match the property name in Notion
+    titleProperty: Name
+    # Optional property mappings. Omit any you don't use.
+    locationProperty: Location
+    descriptionProperty: Notes
+    urlProperty: Link
+
+  # Example 2: a token-protected calendar.
+  # Subscribers use /:slug-:token.ics; without a valid token they get 404.
+  - slug: team-private
+    databaseId: REPLACE_WITH_YOUR_NOTION_DATABASE_ID
+    name: Team-only Events
+    public: false               # NOT listed on the landing page
+    dateProperty: Event Date
+    titleProperty: Title
+    # Generate long, random tokens (e.g. `openssl rand -hex 24`).
+    # Each subscriber gets their own URL; rotate by removing tokens here.
+    tokens:
+      - REPLACE_WITH_LONG_RANDOM_TOKEN_1
+      - REPLACE_WITH_LONG_RANDOM_TOKEN_2
+    cacheTtlSeconds: 600        # override default; longer TTL for low-churn calendars
+
+  # Example 3: a separate Notion integration.
+  # Useful when calendars live in different workspaces or under different
+  # service accounts. The ${VAR} reference is resolved from the environment
+  # at startup; the variable name MUST be uppercase snake case.
+  - slug: clients
+    databaseId: REPLACE_WITH_YOUR_NOTION_DATABASE_ID
+    name: Client meetings
+    public: false
+    dateProperty: When
+    titleProperty: Subject
+    accessToken: ${NOTION_TOKEN_CLIENTS}
+    # Filter Notion query results. Same shape as the Notion API filter.
+    filter:
+      property: Status
+      select:
+        equals: Confirmed
