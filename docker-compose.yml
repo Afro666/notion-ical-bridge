@@ -11,8 +11,8 @@ services:
     ports:
       - "3000:3000"
 
-    # config.yaml is mounted read-only from the host.
-    # Create it from config.example.yaml (lands in Phase 1).
+    # config.yaml is mounted read-only from the host. Copy it from
+    # config.example.yaml and edit before first `docker compose up`.
     volumes:
       - ./config.yaml:/app/config.yaml:ro
 

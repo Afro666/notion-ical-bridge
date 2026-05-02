@@ -39,8 +39,6 @@ USER node
 
 EXPOSE 3000
 
-# Healthcheck hits /healthz once Phase 4 wires the route.
-# Returns failure until then; that's expected for the Phase 0 stub.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget --quiet --spider http://localhost:3000/healthz || exit 1
 
