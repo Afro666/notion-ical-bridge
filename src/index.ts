@@ -1,7 +1,7 @@
 import { Client } from '@notionhq/client';
 import { loadConfig } from './config.js';
 import { resolveDataSourceId, type NotionQueryClient } from './notion.js';
-import { createServer } from './server.js';
+import { createServer, type ResolvedCalendar } from './server.js';
 
 function parsePort(raw: string | undefined): number {
   const value = raw ?? '3000';
@@ -46,32 +46,44 @@ async function main(): Promise<void> {
 
   const config = loadConfig(configPath);
 
-  const notionClients = new Map<string, NotionQueryClient>();
-  // Notion API 2025-09-03 splits databases into wrappers + data sources.
-  // We resolve each calendar's data source ID once at startup so request
-  // path stays a single dataSources.query call. Failures here (no integration
-  // access, wrong DB ID, network) abort startup loudly via the main() catch.
-  const dataSourceIds = new Map<string, string>();
-  for (const cal of config.calendars) {
-    const auth = cal.accessToken ?? defaultToken;
-    if (!auth) {
-      throw new Error(
-        `Calendar "${cal.slug}" needs accessToken in config.yaml or NOTION_TOKEN env var`,
-      );
-    }
-    // No `as unknown as` cast: Client structurally satisfies
-    // NotionQueryClient. The conformance is guarded at build time by
-    // test/notion.types.test.ts so SDK drift fails tsc, not production.
-    const client: NotionQueryClient = new Client({ auth });
-    const dataSourceId = await resolveDataSourceId(client, cal.databaseId);
-    notionClients.set(cal.slug, client);
-    dataSourceIds.set(cal.slug, dataSourceId);
-  }
+  // Resolve all calendars' data source IDs in parallel. Sequential
+  // resolution would scale linearly with calendar count and risk hitting
+  // Docker's healthcheck start_period; Promise.all completes in O(slowest).
+  // Any rejection aborts startup loudly via main()'s catch handler — that
+  // fail-fast is intentional, since serving a partial calendar set silently
+  // would mask misconfiguration.
+  const entries: ReadonlyArray<readonly [string, ResolvedCalendar]> =
+    await Promise.all(
+      config.calendars.map(async (cal) => {
+        const auth = cal.accessToken ?? defaultToken;
+        if (!auth) {
+          throw new Error(
+            `Calendar "${cal.slug}" needs accessToken in config.yaml or NOTION_TOKEN env var`,
+          );
+        }
+        const client: NotionQueryClient = new Client({ auth });
+        try {
+          const dataSourceId = await resolveDataSourceId(
+            client,
+            cal.databaseId,
+          );
+          return [cal.slug, { client, dataSourceId }] as const;
+        } catch (err) {
+          // Re-throw with calendar identity so the operator can spot
+          // which YAML entry to fix without grepping for the DB UUID.
+          const cause = err instanceof Error ? err.message : String(err);
+          throw new Error(
+            `Calendar "${cal.slug}" (db ${cal.databaseId}): ${cause}`,
+            { cause: err },
+          );
+        }
+      }),
+    );
+  const resolvedCalendars = new Map<string, ResolvedCalendar>(entries);
 
   const app = createServer({
     config,
-    notionClients,
-    dataSourceIds,
+    resolvedCalendars,
     logger: { level: logLevel },
   });
 

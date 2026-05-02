@@ -370,6 +370,7 @@ describe('resolveDataSourceId', () => {
 
   it('returns the first data_sources[].id', async () => {
     const { client, retrieve } = makeRetrieveClient({
+      object: 'database',
       data_sources: [{ id: 'ds-primary' }, { id: 'ds-secondary' }],
     });
     const id = await resolveDataSourceId(client, 'db_abc');
@@ -377,10 +378,26 @@ describe('resolveDataSourceId', () => {
     expect(retrieve).toHaveBeenCalledWith({ database_id: 'db_abc' });
   });
 
-  it('throws when data_sources is empty', async () => {
-    const { client } = makeRetrieveClient({ data_sources: [] });
+  it('throws a "partial response" diagnostic when data_sources is undefined', async () => {
+    // Notion's PartialDatabaseObjectResponse — typically returned when
+    // the integration is not connected to the database — omits data_sources.
+    const retrieve = vi.fn().mockResolvedValue({ object: 'database' });
+    const client: NotionQueryClient = {
+      databases: { retrieve },
+      dataSources: { query: vi.fn() },
+    };
     await expect(resolveDataSourceId(client, 'db_abc')).rejects.toThrow(
-      /no data sources/i,
+      /partial response/i,
+    );
+  });
+
+  it('throws a "zero data sources" diagnostic when data_sources is an empty array', async () => {
+    const { client } = makeRetrieveClient({
+      object: 'database',
+      data_sources: [],
+    });
+    await expect(resolveDataSourceId(client, 'db_abc')).rejects.toThrow(
+      /zero data sources/i,
     );
   });
 

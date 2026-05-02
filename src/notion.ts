@@ -35,28 +35,20 @@ export interface NotionQueryResponse {
 }
 
 export interface NotionDatabaseRetrieveResponse {
-  // `id` is unused at runtime but pins the structural conformance check:
-  // both `DatabaseObjectResponse` and `PartialDatabaseObjectResponse` (the
-  // two SDK union members) have it, so requiring it lets TS recognize this
-  // shape as a true superset of the union. Without an anchor field TS
-  // rejects the assignment with "no properties in common".
-  id: string;
-  // Optional because `PartialDatabaseObjectResponse` (returned when the
-  // integration has limited access) omits it. resolveDataSourceId
-  // runtime-checks for the missing case and throws a clear diagnostic.
+  // SDK discriminator — both `DatabaseObjectResponse` and
+  // `PartialDatabaseObjectResponse` carry the literal `'database'`.
+  // Anchors the structural conformance check on a semantically meaningful
+  // field instead of a synthetic one.
+  object: 'database';
+  // Optional because `PartialDatabaseObjectResponse` (limited-access
+  // response) omits it; resolveDataSourceId runtime-checks for that case.
   data_sources?: ReadonlyArray<{ id: string }>;
 }
 
 // Notion API 2025-09-03 split databases into wrappers containing one or
-// more "data sources". The SDK v5 client reflects this: `databases.query`
-// is gone; row queries now go through `dataSources.query` keyed by
-// `data_source_id`. We discover the data source ID at startup via
-// `databases.retrieve` and cache it per slug.
-//
-// The structural-conformance test in test/notion.types.test.ts pins this
-// interface to the real SDK `Client` so future SDK drift fails the build
-// instead of production. The original v1 had `as unknown as` in index.ts
-// that masked exactly this kind of drift.
+// more "data sources". Row queries go through `dataSources.query` keyed
+// by `data_source_id`; the data source ID is discovered via
+// `databases.retrieve` and cached per slug at startup.
 export interface NotionQueryClient {
   databases: {
     retrieve: (args: {
@@ -192,22 +184,33 @@ export function pageToEvent(
   return event;
 }
 
-// 100 is the documented maximum page_size for Notion's dataSources.query endpoint.
+// Notion-documented maximum for dataSources.query.
 const NOTION_PAGE_SIZE_MAX = 100;
 
 // Look up the data source ID for a given Notion database. Even legacy
 // single-source databases (the common case in Notion today) need this
-// indirection under the 2025-09-03 API. We call this once per calendar
-// at startup and cache the result.
+// indirection under the 2025-09-03 API. Called once per calendar at
+// startup; the result is cached.
+//
+// Distinguishes the two no-data-source cases so the operator can triage:
+// - data_sources undefined → SDK returned PartialDatabaseObjectResponse,
+//   which means the integration lacks read access on this database.
+// - data_sources empty array → connected, but Notion provisioned the
+//   database without a data source (a Notion-side anomaly).
 export async function resolveDataSourceId(
   client: NotionQueryClient,
   databaseId: string,
 ): Promise<string> {
   const db = await client.databases.retrieve({ database_id: databaseId });
-  const first = db.data_sources?.[0];
+  if (db.data_sources === undefined) {
+    throw new Error(
+      `Notion database ${databaseId} returned a partial response — the integration likely does not have read access to it. Check the database's Connections in Notion.`,
+    );
+  }
+  const first = db.data_sources[0];
   if (!first) {
     throw new Error(
-      `Notion database ${databaseId} returned no data sources — the integration may not be connected to it`,
+      `Notion database ${databaseId} has zero data sources — this is unexpected for a normal database and may indicate a Notion-side issue.`,
     );
   }
   return first.id;

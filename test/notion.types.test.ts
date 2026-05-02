@@ -54,14 +54,25 @@ describe('resolveDataSourceId typed against real Client (network mocked)', () =>
     });
   });
 
-  it('throws when data_sources is empty', async () => {
+  it('throws when data_sources is an empty array', async () => {
     const client = new Client({ auth: 'fake-test-token' });
     vi.spyOn(client.databases, 'retrieve').mockResolvedValue({
       data_sources: [],
     } as never);
 
     await expect(resolveDataSourceId(client, 'db_fake')).rejects.toThrow(
-      /no data sources/i,
+      /zero data sources/i,
+    );
+  });
+
+  it('throws a partial-response diagnostic when data_sources is undefined', async () => {
+    const client = new Client({ auth: 'fake-test-token' });
+    vi.spyOn(client.databases, 'retrieve').mockResolvedValue({
+      // PartialDatabaseObjectResponse omits data_sources entirely.
+    } as never);
+
+    await expect(resolveDataSourceId(client, 'db_fake')).rejects.toThrow(
+      /partial response/i,
     );
   });
 });

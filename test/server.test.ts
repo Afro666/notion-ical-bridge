@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createServer } from '../src/server.js';
+import { createServer, type ResolvedCalendar } from '../src/server.js';
 import type { CalendarConfig } from '../src/config.js';
 import type {
   NotionQueryClient,
@@ -47,20 +47,23 @@ function makeRejectingClient(query: ReturnType<typeof vi.fn>): NotionQueryClient
   };
 }
 
-// Default data source ID used by tests that don't care about the value.
-// In production index.ts resolves this once per slug at startup.
+// Synthetic data source ID used by tests; in production index.ts resolves
+// the real ID once per slug at startup via Notion's databases.retrieve.
 const FAKE_DS_ID = 'ds_test';
 
-function dsMap(slugs: readonly string[]): Map<string, string> {
-  return new Map(slugs.map((s) => [s, FAKE_DS_ID]));
+function resolvedMap(
+  pairs: ReadonlyArray<readonly [string, NotionQueryClient]>,
+): Map<string, ResolvedCalendar> {
+  return new Map(
+    pairs.map(([slug, client]) => [slug, { client, dataSourceId: FAKE_DS_ID }]),
+  );
 }
 
 describe('createServer - GET /healthz', () => {
   it('returns 200 with body "ok"', async () => {
     const app = createServer({
       config: { calendars: [] },
-      notionClients: new Map(),
-      dataSourceIds: new Map(),
+      resolvedCalendars: new Map(),
     });
     const res = await app.inject({ method: 'GET', url: '/healthz' });
     expect(res.statusCode).toBe(200);
@@ -70,8 +73,7 @@ describe('createServer - GET /healthz', () => {
   it('takes precedence over the parametric /:filename route even if a calendar is named "healthz"', async () => {
     const app = createServer({
       config: { calendars: [makeCalendar({ slug: 'healthz' })] },
-      notionClients: new Map(),
-      dataSourceIds: new Map(),
+      resolvedCalendars: new Map(),
     });
     const res = await app.inject({ method: 'GET', url: '/healthz' });
     expect(res.statusCode).toBe(200);
@@ -87,8 +89,7 @@ describe('createServer - GET /:slug.ics', () => {
     const calendar = makeCalendar({ slug: 'sisterhood' });
     const app = createServer({
       config: { calendars: [calendar] },
-      notionClients: new Map([['sisterhood', client]]),
-      dataSourceIds: dsMap(['sisterhood']),
+      resolvedCalendars: resolvedMap([['sisterhood', client]]),
     });
 
     const res = await app.inject({ method: 'GET', url: '/sisterhood.ics' });
@@ -103,8 +104,7 @@ describe('createServer - GET /:slug.ics', () => {
     const calendar = makeCalendar({ slug: 'fast', cacheTtlSeconds: 60 });
     const app = createServer({
       config: { calendars: [calendar] },
-      notionClients: new Map([['fast', client]]),
-      dataSourceIds: dsMap(['fast']),
+      resolvedCalendars: resolvedMap([['fast', client]]),
     });
 
     const res = await app.inject({ method: 'GET', url: '/fast.ics' });
@@ -114,8 +114,7 @@ describe('createServer - GET /:slug.ics', () => {
   it('returns 404 for an unknown slug', async () => {
     const app = createServer({
       config: { calendars: [makeCalendar({ slug: 'events' })] },
-      notionClients: new Map(),
-      dataSourceIds: new Map(),
+      resolvedCalendars: new Map(),
     });
     const res = await app.inject({ method: 'GET', url: '/nonexistent.ics' });
     expect(res.statusCode).toBe(404);
@@ -124,8 +123,7 @@ describe('createServer - GET /:slug.ics', () => {
   it('returns 404 for paths missing the .ics extension', async () => {
     const app = createServer({
       config: { calendars: [makeCalendar({ slug: 'events' })] },
-      notionClients: new Map(),
-      dataSourceIds: new Map(),
+      resolvedCalendars: new Map(),
     });
     const res = await app.inject({ method: 'GET', url: '/events' });
     expect(res.statusCode).toBe(404);
@@ -138,8 +136,7 @@ describe('createServer - GET /:slug.ics', () => {
     const calendar = makeCalendar({ slug: 'cached', cacheTtlSeconds: 300 });
     const app = createServer({
       config: { calendars: [calendar] },
-      notionClients: new Map([['cached', client]]),
-      dataSourceIds: dsMap(['cached']),
+      resolvedCalendars: resolvedMap([['cached', client]]),
     });
 
     await app.inject({ method: 'GET', url: '/cached.ics' });
@@ -152,8 +149,7 @@ describe('createServer - GET /:slug.ics', () => {
     const calendar = makeCalendar({ slug: 'failing' });
     const app = createServer({
       config: { calendars: [calendar] },
-      notionClients: new Map([['failing', makeRejectingClient(query)]]),
-      dataSourceIds: dsMap(['failing']),
+      resolvedCalendars: resolvedMap([['failing', makeRejectingClient(query)]]),
     });
 
     const res = await app.inject({ method: 'GET', url: '/failing.ics' });
@@ -161,12 +157,11 @@ describe('createServer - GET /:slug.ics', () => {
     expect(res.body).toBe('Service Unavailable');
   });
 
-  it('returns 503 when calendar is configured but no Notion client is registered', async () => {
+  it('returns 503 when calendar is configured but no resolved entry is registered', async () => {
     const calendar = makeCalendar({ slug: 'unwired' });
     const app = createServer({
       config: { calendars: [calendar] },
-      notionClients: new Map(),
-      dataSourceIds: new Map(),
+      resolvedCalendars: new Map(),
     });
     const res = await app.inject({ method: 'GET', url: '/unwired.ics' });
     expect(res.statusCode).toBe(503);
@@ -182,8 +177,7 @@ describe('createServer - GET /:slug.ics', () => {
     const calendar = makeCalendar({ slug: 'busy' });
     const app = createServer({
       config: { calendars: [calendar] },
-      notionClients: new Map([['busy', makeRejectingClient(query)]]),
-      dataSourceIds: dsMap(['busy']),
+      resolvedCalendars: resolvedMap([['busy', makeRejectingClient(query)]]),
     });
 
     const r1 = app.inject({ method: 'GET', url: '/busy.ics' });
@@ -213,8 +207,7 @@ describe('createServer - GET /:slug.ics', () => {
     const calendar = makeCalendar({ slug: 'recovers' });
     const app = createServer({
       config: { calendars: [calendar] },
-      notionClients: new Map([['recovers', makeRejectingClient(query)]]),
-      dataSourceIds: dsMap(['recovers']),
+      resolvedCalendars: resolvedMap([['recovers', makeRejectingClient(query)]]),
     });
 
     const fail = await app.inject({ method: 'GET', url: '/recovers.ics' });
@@ -233,8 +226,7 @@ describe('createServer - token auth via /:slug-:token.ics', () => {
     const calendar = makeCalendar({ slug: 'protected', tokens: ['secret-1'] });
     const app = createServer({
       config: { calendars: [calendar] },
-      notionClients: new Map([['protected', client]]),
-      dataSourceIds: dsMap(['protected']),
+      resolvedCalendars: resolvedMap([['protected', client]]),
     });
 
     const res = await app.inject({ method: 'GET', url: '/protected.ics' });
@@ -251,8 +243,7 @@ describe('createServer - token auth via /:slug-:token.ics', () => {
     const calendar = makeCalendar({ slug: 'protected', tokens: ['secret-1'] });
     const app = createServer({
       config: { calendars: [calendar] },
-      notionClients: new Map([['protected', client]]),
-      dataSourceIds: dsMap(['protected']),
+      resolvedCalendars: resolvedMap([['protected', client]]),
     });
 
     const res = await app.inject({
@@ -269,8 +260,7 @@ describe('createServer - token auth via /:slug-:token.ics', () => {
     const calendar = makeCalendar({ slug: 'protected', tokens: ['secret-1'] });
     const app = createServer({
       config: { calendars: [calendar] },
-      notionClients: new Map([['protected', client]]),
-      dataSourceIds: dsMap(['protected']),
+      resolvedCalendars: resolvedMap([['protected', client]]),
     });
 
     const res = await app.inject({
@@ -291,8 +281,7 @@ describe('createServer - token auth via /:slug-:token.ics', () => {
     });
     const app = createServer({
       config: { calendars: [calendar] },
-      notionClients: new Map([['multi', client]]),
-      dataSourceIds: dsMap(['multi']),
+      resolvedCalendars: resolvedMap([['multi', client]]),
     });
 
     const r1 = await app.inject({ method: 'GET', url: '/multi-alpha.ics' });
@@ -310,8 +299,7 @@ describe('createServer - token auth via /:slug-:token.ics', () => {
     const calendar = makeCalendar({ slug: 'open' });
     const app = createServer({
       config: { calendars: [calendar] },
-      notionClients: new Map([['open', client]]),
-      dataSourceIds: dsMap(['open']),
+      resolvedCalendars: resolvedMap([['open', client]]),
     });
 
     const res = await app.inject({ method: 'GET', url: '/open.ics' });
@@ -323,8 +311,7 @@ describe('createServer - token auth via /:slug-:token.ics', () => {
     const calendar = makeCalendar({ slug: 'open' });
     const app = createServer({
       config: { calendars: [calendar] },
-      notionClients: new Map([['open', client]]),
-      dataSourceIds: dsMap(['open']),
+      resolvedCalendars: resolvedMap([['open', client]]),
     });
 
     const res = await app.inject({
@@ -345,8 +332,7 @@ describe('createServer - token auth via /:slug-:token.ics', () => {
     });
     const app = createServer({
       config: { calendars: [calendar] },
-      notionClients: new Map([['shared', client]]),
-      dataSourceIds: dsMap(['shared']),
+      resolvedCalendars: resolvedMap([['shared', client]]),
     });
 
     await app.inject({ method: 'GET', url: '/shared-alpha.ics' });
@@ -368,8 +354,7 @@ describe('createServer - token auth via /:slug-:token.ics', () => {
     });
     const app = createServer({
       config: { calendars: [calendar] },
-      notionClients: new Map([['events', client]]),
-      dataSourceIds: dsMap(['events']),
+      resolvedCalendars: resolvedMap([['events', client]]),
     });
 
     const res = await app.inject({
@@ -397,11 +382,10 @@ describe('createServer - token auth via /:slug-:token.ics', () => {
           makeCalendar({ slug: 'team-alpha' }),
         ],
       },
-      notionClients: new Map([
+      resolvedCalendars: resolvedMap([
         ['team', clientShort],
         ['team-alpha', clientLong],
       ]),
-      dataSourceIds: dsMap(['team', 'team-alpha']),
     });
 
     const res = await app.inject({ method: 'GET', url: '/team-alpha.ics' });
@@ -418,8 +402,7 @@ describe('createServer - token auth via /:slug-:token.ics', () => {
     const logs: unknown[] = [];
     const app = createServer({
       config: { calendars: [calendar] },
-      notionClients: new Map(),
-      dataSourceIds: new Map(),
+      resolvedCalendars: new Map(),
       logger: {
         level: 'info',
         stream: {
@@ -453,8 +436,7 @@ describe('createServer - stale-cache fallback on Notion failure', () => {
       const calendar = makeCalendar({ slug: 'flaky', cacheTtlSeconds: 60 });
       const app = createServer({
         config: { calendars: [calendar] },
-        notionClients: new Map([['flaky', makeRejectingClient(query)]]),
-        dataSourceIds: dsMap(['flaky']),
+        resolvedCalendars: resolvedMap([['flaky', makeRejectingClient(query)]]),
       });
 
       // Prime the cache.
@@ -480,8 +462,7 @@ describe('createServer - stale-cache fallback on Notion failure', () => {
     const calendar = makeCalendar({ slug: 'cold' });
     const app = createServer({
       config: { calendars: [calendar] },
-      notionClients: new Map([['cold', makeRejectingClient(query)]]),
-      dataSourceIds: dsMap(['cold']),
+      resolvedCalendars: resolvedMap([['cold', makeRejectingClient(query)]]),
     });
 
     const res = await app.inject({ method: 'GET', url: '/cold.ics' });
@@ -502,8 +483,7 @@ describe('createServer - stale-cache fallback on Notion failure', () => {
       const calendar = makeCalendar({ slug: 'flaky', cacheTtlSeconds: 600 });
       const app = createServer({
         config: { calendars: [calendar] },
-        notionClients: new Map([['flaky', makeRejectingClient(query)]]),
-        dataSourceIds: dsMap(['flaky']),
+        resolvedCalendars: resolvedMap([['flaky', makeRejectingClient(query)]]),
       });
 
       await app.inject({ method: 'GET', url: '/flaky.ics' });
@@ -538,8 +518,7 @@ describe('createServer - cache TTL expiry at the route level', () => {
     const calendar = makeCalendar({ slug: 'ttl', cacheTtlSeconds: 60 });
     const app = createServer({
       config: { calendars: [calendar] },
-      notionClients: new Map([['ttl', client]]),
-      dataSourceIds: dsMap(['ttl']),
+      resolvedCalendars: resolvedMap([['ttl', client]]),
     });
 
     await app.inject({ method: 'GET', url: '/ttl.ics' });
@@ -556,8 +535,7 @@ describe('createServer - GET / (landing page)', () => {
   it('returns HTML', async () => {
     const app = createServer({
       config: { calendars: [makeCalendar({ public: true })] },
-      notionClients: new Map(),
-      dataSourceIds: new Map(),
+      resolvedCalendars: new Map(),
     });
     const res = await app.inject({ method: 'GET', url: '/' });
     expect(res.statusCode).toBe(200);
@@ -572,8 +550,7 @@ describe('createServer - GET / (landing page)', () => {
           makeCalendar({ slug: 'private-cal', name: 'Private Cal', public: false }),
         ],
       },
-      notionClients: new Map(),
-      dataSourceIds: new Map(),
+      resolvedCalendars: new Map(),
     });
     const res = await app.inject({ method: 'GET', url: '/' });
     expect(res.body).toContain('public-cal');
@@ -583,8 +560,7 @@ describe('createServer - GET / (landing page)', () => {
   it('shows both webcal:// and https:// links derived from the request host', async () => {
     const app = createServer({
       config: { calendars: [makeCalendar({ slug: 'sub', public: true })] },
-      notionClients: new Map(),
-      dataSourceIds: new Map(),
+      resolvedCalendars: new Map(),
     });
     const res = await app.inject({
       method: 'GET',
@@ -598,8 +574,7 @@ describe('createServer - GET / (landing page)', () => {
   it('renders an empty state when no public calendars are configured', async () => {
     const app = createServer({
       config: { calendars: [makeCalendar({ public: false })] },
-      notionClients: new Map(),
-      dataSourceIds: new Map(),
+      resolvedCalendars: new Map(),
     });
     const res = await app.inject({ method: 'GET', url: '/' });
     expect(res.statusCode).toBe(200);
@@ -617,8 +592,7 @@ describe('createServer - GET / (landing page)', () => {
           }),
         ],
       },
-      notionClients: new Map(),
-      dataSourceIds: new Map(),
+      resolvedCalendars: new Map(),
     });
     const res = await app.inject({ method: 'GET', url: '/' });
     expect(res.body).not.toContain('<script>alert(1)</script>');
