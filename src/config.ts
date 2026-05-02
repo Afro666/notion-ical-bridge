@@ -3,8 +3,24 @@ import { parse as parseYaml } from 'yaml';
 import { z, ZodError } from 'zod';
 
 const SLUG_REGEX = /^[a-z0-9-]+$/;
-const ENV_INTERPOLATION_REGEX = /\$\{([A-Z_][A-Z0-9_]*)\}/g;
+
+// Match any ${...} so we can throw a precise error on names that don't match
+// our supported shape (uppercase snake case). Letting unknown patterns pass
+// through silently confused users on Windows where mixed-case env vars are common.
+const ENV_INTERPOLATION_REGEX = /\$\{([^}]+)\}/g;
+const ENV_VAR_NAME_REGEX = /^[A-Z_][A-Z0-9_]*$/;
+
 const DEFAULT_CACHE_TTL_SECONDS = 300;
+
+export class ConfigValidationError extends Error {
+  readonly issues: ZodError['issues'];
+
+  constructor(message: string, issues: ZodError['issues'], options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'ConfigValidationError';
+    this.issues = issues;
+  }
+}
 
 const RawCalendarSchema = z.object({
   slug: z
@@ -77,10 +93,15 @@ export interface Config {
 
 function interpolateEnv(value: string): string {
   return value.replace(ENV_INTERPOLATION_REGEX, (_match, name: string) => {
-    const v = process.env[name];
-    if (v === undefined) {
+    if (!ENV_VAR_NAME_REGEX.test(name)) {
       throw new Error(
-        `Environment variable ${name} referenced in config is not set`,
+        `Environment variable reference "\${${name}}" must be uppercase snake case (e.g. \${NOTION_TOKEN}); lowercase or mixed-case names are not supported`,
+      );
+    }
+    const v = process.env[name];
+    if (v === undefined || v === '') {
+      throw new Error(
+        `Environment variable ${name} referenced in config is not set or is empty`,
       );
     }
     return v;
@@ -123,7 +144,8 @@ export function parseConfig(yamlString: string): Config {
   try {
     parsed = parseYaml(yamlString);
   } catch (err) {
-    throw new Error(`Failed to parse YAML: ${(err as Error).message}`);
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to parse YAML: ${message}`, { cause: err });
   }
 
   let validated: z.infer<typeof RawConfigSchema>;
@@ -131,10 +153,14 @@ export function parseConfig(yamlString: string): Config {
     validated = RawConfigSchema.parse(parsed);
   } catch (err) {
     if (err instanceof ZodError) {
-      const issues = err.issues
+      const summary = err.issues
         .map((i) => `  - ${i.path.join('.') || '(root)'}: ${i.message}`)
         .join('\n');
-      throw new Error(`Config validation failed:\n${issues}`);
+      throw new ConfigValidationError(
+        `Config validation failed:\n${summary}`,
+        err.issues,
+        { cause: err },
+      );
     }
     throw err;
   }
@@ -145,6 +171,11 @@ export function parseConfig(yamlString: string): Config {
 }
 
 export function loadConfig(path: string): Config {
-  const yamlString = readFileSync(path, 'utf-8');
+  let yamlString: string;
+  try {
+    yamlString = readFileSync(path, 'utf-8');
+  } catch (err) {
+    throw new Error(`Failed to read config file at ${path}`, { cause: err });
+  }
   return parseConfig(yamlString);
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { parseConfig } from '../src/config.js';
+import { ConfigValidationError, loadConfig, parseConfig } from '../src/config.js';
 
 describe('parseConfig', () => {
   describe('valid configs', () => {
@@ -171,7 +171,32 @@ calendars:
       const yaml = `
 calendars: []
 `;
-      expect(() => parseConfig(yaml)).toThrow();
+      expect(() => parseConfig(yaml)).toThrow(/at least one calendar/i);
+    });
+
+    it('throws ConfigValidationError with structured issues for Zod failures', () => {
+      const yaml = `
+calendars:
+  - slug: events
+    timezone: UTC
+    dateProperty: Date
+    titleProperty: Name
+`;
+      try {
+        parseConfig(yaml);
+        expect.fail('expected parseConfig to throw');
+      } catch (err) {
+        expect(err).toBeInstanceOf(ConfigValidationError);
+        const cve = err as ConfigValidationError;
+        expect(cve.issues.length).toBeGreaterThan(0);
+        expect(cve.issues.some((i) => i.path.includes('databaseId'))).toBe(true);
+        expect(cve.cause).toBeDefined();
+      }
+    });
+
+    it('throws clear error for malformed YAML syntax', () => {
+      const yaml = `calendars: [\n  - slug: unclosed`;
+      expect(() => parseConfig(yaml)).toThrow(/Failed to parse YAML/);
     });
   });
 
@@ -201,6 +226,21 @@ calendars:
 `;
       const config = parseConfig(yaml);
       expect(config.calendars[0]!.timezone).toBe('Europe/Berlin');
+    });
+
+    it('uses defaults.cacheTtlSeconds when calendar-level is absent', () => {
+      const yaml = `
+defaults:
+  cacheTtlSeconds: 600
+calendars:
+  - slug: events
+    databaseId: db_abc
+    timezone: UTC
+    dateProperty: Date
+    titleProperty: Name
+`;
+      const config = parseConfig(yaml);
+      expect(config.calendars[0]!.cacheTtlSeconds).toBe(600);
     });
 
     it('uses calendar-level cacheTtlSeconds over defaults.cacheTtlSeconds', () => {
@@ -269,6 +309,49 @@ calendars:
     accessToken: \${NOTION_TOKEN_MISSING}
 `;
       expect(() => parseConfig(yaml)).toThrow(/NOTION_TOKEN_MISSING/);
+    });
+
+    it('throws when ${ENV_VAR} interpolation references empty-string variable', () => {
+      process.env.NOTION_TOKEN_EMPTY = '';
+      const yaml = `
+calendars:
+  - slug: sisterhood
+    databaseId: db_abc
+    timezone: UTC
+    dateProperty: Date
+    titleProperty: Name
+    accessToken: \${NOTION_TOKEN_EMPTY}
+`;
+      expect(() => parseConfig(yaml)).toThrow(/NOTION_TOKEN_EMPTY/);
+    });
+
+    it('throws when ${ENV_VAR} reference uses lowercase or mixed-case name', () => {
+      process.env.notion_token = 'should_not_be_resolved';
+      const yaml = `
+calendars:
+  - slug: sisterhood
+    databaseId: db_abc
+    timezone: UTC
+    dateProperty: Date
+    titleProperty: Name
+    accessToken: \${notion_token}
+`;
+      expect(() => parseConfig(yaml)).toThrow(/uppercase snake case/i);
+    });
+  });
+
+  describe('loadConfig', () => {
+    it('throws clear error wrapping the cause when file does not exist', () => {
+      const path = '/nonexistent/path/notion-ical-bridge-test-config.yaml';
+      try {
+        loadConfig(path);
+        expect.fail('expected loadConfig to throw');
+      } catch (err) {
+        expect(err).toBeInstanceOf(Error);
+        expect((err as Error).message).toMatch(/Failed to read config file/);
+        expect((err as Error).message).toContain(path);
+        expect((err as Error).cause).toBeDefined();
+      }
     });
   });
 });
