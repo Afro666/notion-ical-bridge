@@ -1,3 +1,5 @@
+import { Buffer } from 'node:buffer';
+import { timingSafeEqual } from 'node:crypto';
 import Fastify, {
   type FastifyInstance,
   type FastifyLoggerOptions,
@@ -115,6 +117,26 @@ interface ResolvedRoute {
   token?: string;
 }
 
+// Constant-time membership check: avoid leaking which token a request was
+// closest to via response-latency timing. The length pre-check leaks token
+// LENGTH (not value), which is acceptable for high-entropy random tokens.
+function tokenMatches(candidate: string, allowed: readonly string[]): boolean {
+  const candidateBuf = Buffer.from(candidate);
+  // Reduce-style fold so we check every entry instead of short-circuiting,
+  // which would itself be a (weaker) timing oracle on list position.
+  let matched = false;
+  for (const t of allowed) {
+    const tBuf = Buffer.from(t);
+    if (
+      candidateBuf.length === tBuf.length &&
+      timingSafeEqual(candidateBuf, tBuf)
+    ) {
+      matched = true;
+    }
+  }
+  return matched;
+}
+
 function resolveRoute(
   filename: string,
   slugsByLengthDesc: readonly string[],
@@ -189,7 +211,7 @@ export function createServer(deps: ServerDeps): FastifyInstance {
       // exists to anonymous probes. Always 404 on any auth mismatch so that
       // protected calendars are indistinguishable from non-existent ones.
       if (calendar.tokens !== undefined) {
-        if (token === undefined || !calendar.tokens.includes(token)) {
+        if (token === undefined || !tokenMatches(token, calendar.tokens)) {
           reply.code(404);
           return 'Not Found';
         }
@@ -214,11 +236,24 @@ export function createServer(deps: ServerDeps): FastifyInstance {
 
         let pending = inFlight.get(slug);
         if (pending === undefined) {
+          // Log inside the IIFE rather than per-waiter so a Notion outage
+          // produces ONE log line per upstream call, not one per coalesced
+          // subscriber. The error is never leaked to clients — pino is
+          // passed only scoped fields rather than the raw error tree.
           pending = (async () => {
             try {
               const result = await fetchEvents(client, calendar);
               cache.set(slug, result, calendar.cacheTtlSeconds);
               return result;
+            } catch (err) {
+              req.log.error(
+                {
+                  slug,
+                  message: err instanceof Error ? err.message : String(err),
+                },
+                'Failed to fetch events from Notion',
+              );
+              throw err;
             } finally {
               inFlight.delete(slug);
             }
@@ -228,20 +263,10 @@ export function createServer(deps: ServerDeps): FastifyInstance {
 
         try {
           events = await pending;
-        } catch (err) {
-          // Never leak the underlying error to clients — it could include
-          // token fragments or request bodies depending on the SDK. Pino is
-          // also passed only scoped fields rather than the raw error tree.
-          req.log.error(
-            {
-              slug,
-              message: err instanceof Error ? err.message : String(err),
-            },
-            'Failed to fetch events from Notion',
-          );
-          // Stale-cache fallback: serve the last good body if we have one,
-          // so a transient Notion outage doesn't break every subscriber's
-          // calendar at once.
+        } catch {
+          // The IIFE already logged. Decide stale vs 503: serve the last
+          // good body if we have one, so a transient Notion outage doesn't
+          // break every subscriber's calendar at once.
           const stale = cache.getStale(slug);
           if (stale === undefined) {
             reply.code(503);
@@ -252,7 +277,25 @@ export function createServer(deps: ServerDeps): FastifyInstance {
         }
       }
 
-      const ics = buildIcalFeed(events, calendar);
+      let ics: string;
+      try {
+        ics = buildIcalFeed(events, calendar);
+      } catch (err) {
+        // A stale body containing a malformed date can fail serialization.
+        // Without this catch the request would 500 with no slug context,
+        // leaving operators blind to which calendar is broken.
+        req.log.error(
+          {
+            slug,
+            servedStale,
+            eventCount: events.length,
+            message: err instanceof Error ? err.message : String(err),
+          },
+          'Failed to build iCal feed',
+        );
+        reply.code(500);
+        return 'Internal Server Error';
+      }
       reply.type('text/calendar; charset=utf-8');
       if (servedStale) {
         reply.header('X-Cache', 'stale');

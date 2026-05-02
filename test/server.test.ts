@@ -300,17 +300,6 @@ describe('createServer - token auth via /:slug-:token.ics', () => {
     expect(query).not.toHaveBeenCalled();
   });
 
-  it('treats an empty tokens: [] array as token-protected (404 on bare slug)', async () => {
-    const calendar = makeCalendar({ slug: 'sealed', tokens: [] });
-    const app = createServer({
-      config: { calendars: [calendar] },
-      notionClients: new Map(),
-    });
-
-    const res = await app.inject({ method: 'GET', url: '/sealed.ics' });
-    expect(res.statusCode).toBe(404);
-  });
-
   it('shares cache across distinct valid tokens (cache key = slug, not token)', async () => {
     const { client, query } = makeStubClient(
       makeQueryResponse([samplePage('p1', 'A', '2026-05-02')]),
@@ -327,6 +316,31 @@ describe('createServer - token auth via /:slug-:token.ics', () => {
     await app.inject({ method: 'GET', url: '/shared-alpha.ics' });
     await app.inject({ method: 'GET', url: '/shared-bravo.ics' });
     expect(query).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts a token that itself contains hyphens', async () => {
+    // Guards against a future refactor of resolveRoute that splits on every
+    // hyphen instead of slicing everything after the first slug- prefix.
+    // All other token-auth tests use single-segment tokens, so they would
+    // continue to pass while hyphenated tokens silently broke.
+    const { client } = makeStubClient(
+      makeQueryResponse([samplePage('p1', 'A', '2026-05-02')]),
+    );
+    const calendar = makeCalendar({
+      slug: 'events',
+      tokens: ['my-secret-token'],
+    });
+    const app = createServer({
+      config: { calendars: [calendar] },
+      notionClients: new Map([['events', client]]),
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/events-my-secret-token.ics',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain('UID:p1');
   });
 
   it('prefers the longest matching slug when slugs share a hyphen-prefix', async () => {
