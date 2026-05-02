@@ -114,6 +114,11 @@ export function createServer(deps: ServerDeps): FastifyInstance {
     deps.config.calendars.map((c) => [c.slug, c] as const),
   );
   const cache = new TTLCache<CalendarEvent[]>();
+  // Single-flight: when N concurrent requests miss the cache for the same
+  // slug, only the first hits Notion; the rest await the in-flight promise.
+  // Without this, a polling burst at the TTL boundary would trip Notion's
+  // 3 req/s rate limit and 503 every subscriber.
+  const inFlight = new Map<string, Promise<CalendarEvent[]>>();
 
   app.get('/healthz', async (_req: FastifyRequest, reply: FastifyReply) => {
     reply.type('text/plain; charset=utf-8');
@@ -154,13 +159,34 @@ export function createServer(deps: ServerDeps): FastifyInstance {
           reply.code(503);
           return 'Service Unavailable';
         }
+
+        let pending = inFlight.get(slug);
+        if (pending === undefined) {
+          pending = (async () => {
+            try {
+              const result = await fetchEvents(client, calendar);
+              cache.set(slug, result, calendar.cacheTtlSeconds);
+              return result;
+            } finally {
+              inFlight.delete(slug);
+            }
+          })();
+          inFlight.set(slug, pending);
+        }
+
         try {
-          events = await fetchEvents(client, calendar);
-          cache.set(slug, events, calendar.cacheTtlSeconds);
+          events = await pending;
         } catch (err) {
           // Never leak the underlying error to clients — it could include
-          // token fragments or request bodies depending on the SDK.
-          req.log.error({ slug, err }, 'Failed to fetch events from Notion');
+          // token fragments or request bodies depending on the SDK. Pino is
+          // also passed only scoped fields rather than the raw error tree.
+          req.log.error(
+            {
+              slug,
+              message: err instanceof Error ? err.message : String(err),
+            },
+            'Failed to fetch events from Notion',
+          );
           reply.code(503);
           return 'Service Unavailable';
         }

@@ -20,8 +20,8 @@ export class TTLCache<T> {
     return entry.value;
   }
 
-  // Returns the stored value regardless of expiry. Used by the server to fall
-  // back to last-known-good data when a fresh fetch fails (Phase 5).
+  // Returns the stored value regardless of expiry. Reserved for the Phase 5
+  // stale-cache-on-failure fallback; not yet wired into the server.
   getStale(key: string): T | undefined {
     return this.entries.get(key)?.value;
   }

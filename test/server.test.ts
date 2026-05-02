@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createServer } from '../src/server.js';
 import type { CalendarConfig } from '../src/config.js';
 import type {
@@ -132,7 +132,98 @@ describe('createServer - GET /:slug.ics', () => {
 
     const res = await app.inject({ method: 'GET', url: '/failing.ics' });
     expect(res.statusCode).toBe(503);
-    expect(res.body).not.toContain('Notion API unreachable');
+    expect(res.body).toBe('Service Unavailable');
+  });
+
+  it('returns 503 when calendar is configured but no Notion client is registered', async () => {
+    const calendar = makeCalendar({ slug: 'unwired' });
+    const app = createServer({
+      config: { calendars: [calendar] },
+      notionClients: new Map(),
+    });
+    const res = await app.inject({ method: 'GET', url: '/unwired.ics' });
+    expect(res.statusCode).toBe(503);
+    expect(res.body).toBe('Service Unavailable');
+  });
+
+  it('coalesces concurrent cache-miss requests into a single Notion query', async () => {
+    let resolveQuery!: (response: NotionQueryResponse) => void;
+    const pending = new Promise<NotionQueryResponse>((resolve) => {
+      resolveQuery = resolve;
+    });
+    const query = vi.fn().mockReturnValue(pending);
+    const calendar = makeCalendar({ slug: 'busy' });
+    const app = createServer({
+      config: { calendars: [calendar] },
+      notionClients: new Map([['busy', { databases: { query } }]]),
+    });
+
+    const r1 = app.inject({ method: 'GET', url: '/busy.ics' });
+    const r2 = app.inject({ method: 'GET', url: '/busy.ics' });
+    const r3 = app.inject({ method: 'GET', url: '/busy.ics' });
+
+    // Yield the event loop so all three requests reach the in-flight check.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    resolveQuery(
+      makeQueryResponse([samplePage('p1', 'Coalesced', '2026-05-02')]),
+    );
+
+    const responses = await Promise.all([r1, r2, r3]);
+    expect(responses.every((r) => r.statusCode === 200)).toBe(true);
+    expect(responses.every((r) => r.body.includes('UID:p1'))).toBe(true);
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears the in-flight slot after a failure so the next request retries', async () => {
+    const query = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('transient'))
+      .mockResolvedValueOnce(
+        makeQueryResponse([samplePage('p1', 'Recovered', '2026-05-02')]),
+      );
+    const calendar = makeCalendar({ slug: 'recovers' });
+    const app = createServer({
+      config: { calendars: [calendar] },
+      notionClients: new Map([['recovers', { databases: { query } }]]),
+    });
+
+    const fail = await app.inject({ method: 'GET', url: '/recovers.ics' });
+    expect(fail.statusCode).toBe(503);
+
+    const ok = await app.inject({ method: 'GET', url: '/recovers.ics' });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.body).toContain('UID:p1');
+    expect(query).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('createServer - cache TTL expiry at the route level', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('re-fetches from Notion after the per-calendar TTL elapses', async () => {
+    const { client, query } = makeStubClient(
+      makeQueryResponse([samplePage('p1', 'A', '2026-05-02')]),
+    );
+    const calendar = makeCalendar({ slug: 'ttl', cacheTtlSeconds: 60 });
+    const app = createServer({
+      config: { calendars: [calendar] },
+      notionClients: new Map([['ttl', client]]),
+    });
+
+    await app.inject({ method: 'GET', url: '/ttl.ics' });
+    expect(query).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(61_000);
+
+    await app.inject({ method: 'GET', url: '/ttl.ics' });
+    expect(query).toHaveBeenCalledTimes(2);
   });
 });
 
