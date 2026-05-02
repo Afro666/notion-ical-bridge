@@ -43,7 +43,7 @@ Visit `http://localhost:3000` — calendars marked `public: true` are listed the
 
 ### 2. Find each database ID
 
-Open the database as a full page; the URL is `https://notion.so/<workspace>/<DATABASE_ID>?v=…`. The 32-character chunk before `?v=` is the database ID.
+Open the database as a full page; the URL is `https://notion.so/<workspace>/<DATABASE_ID>?v=…`. The 32-character chunk before `?v=` is the database ID. Notion sometimes renders it as a dashed UUID (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`) — both forms work; paste whichever Notion gives you.
 
 ### 3. Edit `config.yaml`
 
@@ -105,7 +105,7 @@ This avoids opening any inbound port on the homelab and gets you HTTPS for free.
 
 ## Known v1 limitations
 
-- The landing page derives subscribe URLs from the request's `Host` header. If the bridge is reached via an unexpected hostname, the landing page will display URLs for that hostname. For homelab-via-Cloudflare-Tunnel deployments this is fine — you control the hostname. A `PUBLIC_URL` env override is on the roadmap.
+- The landing page derives subscribe URLs from the request's `Host` header. If the bridge is reached via an unexpected hostname, the landing page will display URLs for that hostname. For homelab-via-Cloudflare-Tunnel deployments this is fine — you control the hostname.
 - Tokens are validated via constant-time comparison, but token *length* is leaked. Use long random tokens (≥ 24 bytes of entropy) and length leaks become irrelevant.
 - No on-disk persistence: a process restart drops the cache. Subscribers will see the next refresh take a few hundred ms longer than usual.
 
@@ -113,7 +113,7 @@ This avoids opening any inbound port on the homelab and gets you HTTPS for free.
 
 ```bash
 pnpm install
-pnpm test          # 130 unit tests, no Notion calls
+pnpm test          # unit tests; no live Notion calls needed
 pnpm typecheck
 pnpm build
 pnpm dev           # tsx watch mode against ./config.yaml

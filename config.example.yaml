@@ -3,15 +3,18 @@
 # Copy this file to `config.yaml` and edit it for your databases.
 # `config.yaml` is gitignored — never commit your real database IDs.
 #
-# Schema is validated on startup; any error fails fast with a pointer
-# to the offending field. See the README for a property-by-property
-# walk-through.
+# The schema is validated on startup. Most errors (missing fields,
+# typos in property names, malformed slugs) fail fast at boot with a
+# pointer to the offending field. Note: placeholder databaseId values
+# DO pass schema validation — a Notion lookup error will only surface
+# on the first subscriber request to that calendar.
+# See the README for a property-by-property walk-through.
 
 defaults:
   # Fallback values applied to every calendar that doesn't override them.
   # Calendar-level fields always win.
   timezone: Europe/Amsterdam
-  cacheTtlSeconds: 300         # 5 minutes; respects Notion's 3 req/s limit
+  cacheTtlSeconds: 300         # 5 minutes between upstream Notion fetches
 
 calendars:
 
