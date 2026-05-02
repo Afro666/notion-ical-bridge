@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Typecheck, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        # Version is read from package.json's "packageManager" field — keeping
+        # one source of truth so CI can't drift from local installs.
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+  docker:
+    name: Docker image build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: build
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          # load: true forces buildx to export the image to the local Docker
+          # daemon. Without it, a cache hit can mask source-level breakage by
+          # short-circuiting all RUN steps and reporting green.
+          load: true
+          tags: notion-ical-bridge:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke-start image with no config (expect non-zero, see logs)
+        run: |
+          # Container should fail fast on missing config, NOT crash on import
+          # — that would catch SDK-shape regressions like the v5 method-rename
+          # incident that motivated test/notion.types.test.ts.
+          set +e
+          docker run --rm --name nib-smoke notion-ical-bridge:ci 2>&1 | tee /tmp/smoke.log
+          status=$?
+          set -e
+          if grep -qiE '(is not a function|cannot find module|syntaxerror)' /tmp/smoke.log; then
+            echo "::error::Image crashed on import — likely SDK or build regression"
+            exit 1
+          fi
+          echo "Container exited with status $status (expected non-zero on missing config)"
