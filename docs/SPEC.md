@@ -62,8 +62,11 @@ client (Apple Calendar, Google Calendar, Outlook, Fantastical, Thunderbird).
 1. Parse the URL — the route accepts both `/<slug>.ics` and `/<slug>-<token>.ics`.
 2. Look up the slug in the resolved-calendars map. Unknown slug → `404`.
 3. If the calendar has `tokens` configured, compare the supplied token against
-   each configured token using `crypto.timingSafeEqual` with fold-on-mismatch.
-   Failure → `401`.
+   each configured token using `crypto.timingSafeEqual`, iterating the full
+   list without short-circuiting (see §6.1 for the timing model). Failure →
+   `404`. We deliberately do not return `401`: a `401` would confirm the
+   calendar exists to anonymous probes. Returning `404` makes a protected
+   calendar indistinguishable from a non-existent one.
 4. Cache lookup keyed by **slug only** (not by token). Hit → serve the cached
    bytes with `Cache-Control: public, max-age=<ttl>`.
 5. Cache miss → enter single-flight: if another request for the same slug is
@@ -142,10 +145,16 @@ The iCal builder branches on `isAllDay` to choose between `DATE` and
 
 ### 4.2 All-day anchoring
 
-All-day dates are anchored to **UTC midnight** (`T00:00:00Z`). This is the
-only timezone-agnostic anchor: UTC arithmetic guarantees exactly 24 hours
-between successive UTC midnights, which keeps multi-day all-day spans
-reproducible across DST transitions and host-timezone changes.
+`CalendarEvent` itself stores raw Notion strings (§4.1). At iCal **render**
+time the builder constructs `Date` objects anchored to **UTC midnight**
+(`T00:00:00Z`) and emits them as `DTSTART;VALUE=DATE` / `DTEND;VALUE=DATE`
+per RFC 5545 — the rendered iCal is `DATE`-typed, not `DATE-TIME`-typed,
+so the time component is stripped from the wire output.
+
+UTC midnight is the only timezone-agnostic anchor for the intermediate
+`Date`: UTC arithmetic guarantees exactly 24 hours between successive UTC
+midnights, which keeps multi-day all-day spans reproducible across DST
+transitions and host-timezone changes.
 
 ### 4.3 Date ranges
 
@@ -167,9 +176,10 @@ in place rather than duplicating them when titles or times change.
 - **Cache key:** the slug only. Tokens are validated *before* the cache
   lookup; multiple valid tokens for the same slug share the same cached body.
 - **TTL:** per-calendar `cacheTtlSeconds`, default 300.
-- **Single-flight:** an `inFlight: Map<slug, Promise<events>>` coalesces
-  concurrent cache misses. This protects against bursty calendar-client
-  polling and keeps Notion's 3 req/s rate limit from being tripped.
+- **Single-flight:** an `inFlight: Map<string, Promise<CalendarEvent[]>>`
+  coalesces concurrent cache misses (keyed by slug). This protects against
+  bursty calendar-client polling and keeps Notion's 3 req/s rate limit from
+  being tripped.
 - **Stale fallback:** if Notion fails *and* the cache holds a stale entry,
   the stale bytes are served. This trades freshness for availability during
   Notion incidents, which calendar subscribers prefer overwhelmingly.
@@ -184,7 +194,7 @@ in place rather than duplicating them when titles or times change.
 |--------|------------|
 | Token leakage in error responses | Notion errors never leak to the response body; only a generic `503` is returned. |
 | Token leakage in logs | Per-request logs are scoped to `{ slug, message }`. The token is never logged. |
-| Timing attack against token comparison | `crypto.timingSafeEqual` with fold-on-mismatch (constant-time over the entire token list, not just the one matching position). |
+| Timing attack against token comparison | `crypto.timingSafeEqual` per candidate, with the loop iterating every entry (no short-circuit on first match) so list-position is not leaked via latency. The implementation includes a length pre-check, which leaks token *length* but not value — acceptable when tokens are high-entropy random bytes per the operator guidance in §6.2. See `tokenMatches` in `src/server.ts`. |
 | XSS on the landing page | All Notion-controlled metadata is HTML-escaped before rendering. |
 | Calendar-client RCE/XSS via crafted Notion content | iCal output is character-escaped per RFC 5545; properties are not interpolated into raw output. |
 | Image baking secrets | `.env`, `config.yaml`, `node_modules`, `dist`, and `test` are excluded by `.dockerignore`. The runtime stage copies only built `dist`, prod-pruned `node_modules`, and `package.json`. |

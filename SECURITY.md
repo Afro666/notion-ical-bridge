@@ -61,7 +61,7 @@ Out of scope — please don't report:
 
 For context when reviewing:
 
-- Tokens are compared with `crypto.timingSafeEqual` in `src/server.ts`, with fold-on-mismatch to avoid leaking position-of-first-difference.
+- Tokens are compared with `crypto.timingSafeEqual` in `src/server.ts`. The loop iterates every configured token without short-circuiting, so list-position is not leaked via response latency. A length pre-check leaks token *length* but not value; this is acceptable when tokens are high-entropy random bytes (operator guidance: ≥ 32 bytes, rotate periodically).
 - Notion errors never propagate to the response body — they log scoped `{ slug, message }` and return a generic `503 Service Unavailable`.
 - The landing page HTML-escapes calendar metadata to prevent XSS via Notion-controlled fields.
 - The Docker image runs as the unprivileged `node` user (UID 1000); no `root` runtime.

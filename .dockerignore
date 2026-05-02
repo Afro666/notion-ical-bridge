@@ -45,10 +45,11 @@ yarn-debug.log*
 *.tar
 
 # Docs and project meta — not needed by the runtime stage.
+# *.md covers README, CONTRIBUTING, CODE_OF_CONDUCT, SECURITY, and the
+# gitignored Initial plan.md scaffold.
 *.md
 docs/
 LICENSE
-Initial plan.md
 
 # Docker bookkeeping (avoid recursive copy).
 Dockerfile
