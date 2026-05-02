@@ -15,11 +15,16 @@ import {
 import { buildIcalFeed } from './ical.js';
 import { TTLCache } from './cache.js';
 
+export interface ResolvedCalendar {
+  client: NotionQueryClient;
+  dataSourceId: string;
+}
+
 export interface ServerDeps {
   config: Config;
   // Map keyed by calendar slug. index.ts pre-resolves auth tokens at startup
   // so the server itself never sees a raw Notion token.
-  notionClients: Map<string, NotionQueryClient>;
+  resolvedCalendars: Map<string, ResolvedCalendar>;
   logger?: boolean | FastifyLoggerOptions;
 }
 
@@ -225,14 +230,17 @@ export function createServer(deps: ServerDeps): FastifyInstance {
       let events = cache.get(slug);
       let servedStale = false;
       if (events === undefined) {
-        const client = deps.notionClients.get(slug);
-        if (!client) {
-          // Configuration bug: calendar exists but no Notion client wired.
-          // Treat as 503 rather than crashing the request.
-          req.log.error({ slug }, 'No Notion client registered for calendar');
+        const resolved = deps.resolvedCalendars.get(slug);
+        if (!resolved) {
+          // Startup wiring bug: calendar parsed from config but never
+          // resolved. index.ts builds resolvedCalendars only on success,
+          // so this branch is unreachable in normal operation; we still
+          // 503 defensively rather than crashing the request.
+          req.log.error({ slug }, 'No resolved calendar registered for slug');
           reply.code(503);
           return 'Service Unavailable';
         }
+        const { client, dataSourceId } = resolved;
 
         let pending = inFlight.get(slug);
         if (pending === undefined) {
@@ -242,7 +250,7 @@ export function createServer(deps: ServerDeps): FastifyInstance {
           // passed only scoped fields rather than the raw error tree.
           pending = (async () => {
             try {
-              const result = await fetchEvents(client, calendar);
+              const result = await fetchEvents(client, calendar, dataSourceId);
               cache.set(slug, result, calendar.cacheTtlSeconds);
               return result;
             } catch (err) {
@@ -264,9 +272,8 @@ export function createServer(deps: ServerDeps): FastifyInstance {
         try {
           events = await pending;
         } catch {
-          // The IIFE already logged. Decide stale vs 503: serve the last
-          // good body if we have one, so a transient Notion outage doesn't
-          // break every subscriber's calendar at once.
+          // Serve the last good body if we have one, so a transient Notion
+          // outage doesn't break every subscriber's calendar at once.
           const stale = cache.getStale(slug);
           if (stale === undefined) {
             reply.code(503);

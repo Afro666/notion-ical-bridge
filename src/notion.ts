@@ -1,4 +1,9 @@
+import type { Client } from '@notionhq/client';
 import type { CalendarConfig } from './config.js';
+
+// Derived from the SDK so our query signature stays in lockstep with it.
+// If the SDK changes the filter shape, every call site here fails to type.
+type SDKQueryArgs = Parameters<Client['dataSources']['query']>[0];
 
 export interface CalendarEvent {
   id: string;
@@ -12,8 +17,13 @@ export interface CalendarEvent {
 }
 
 export interface NotionQueryArgs {
-  database_id: string;
-  filter?: Record<string, unknown>;
+  data_source_id: string;
+  // Filter type delegated to the SDK — keeps the structural conformance
+  // exact and lets the SDK's typed filter shape flow through unchanged.
+  // calendar.filter (a YAML-loaded Record<string, unknown>) is cast to
+  // this at the assignment site in fetchEvents; we don't validate filter
+  // shape ourselves, so the cast is intentional.
+  filter?: SDKQueryArgs['filter'];
   start_cursor?: string;
   page_size?: number;
 }
@@ -24,8 +34,28 @@ export interface NotionQueryResponse {
   next_cursor: string | null;
 }
 
+export interface NotionDatabaseRetrieveResponse {
+  // SDK discriminator — both `DatabaseObjectResponse` and
+  // `PartialDatabaseObjectResponse` carry the literal `'database'`.
+  // Anchors the structural conformance check on a semantically meaningful
+  // field instead of a synthetic one.
+  object: 'database';
+  // Optional because `PartialDatabaseObjectResponse` (limited-access
+  // response) omits it; resolveDataSourceId runtime-checks for that case.
+  data_sources?: ReadonlyArray<{ id: string }>;
+}
+
+// Notion API 2025-09-03 split databases into wrappers containing one or
+// more "data sources". Row queries go through `dataSources.query` keyed
+// by `data_source_id`; the data source ID is discovered via
+// `databases.retrieve` and cached per slug at startup.
 export interface NotionQueryClient {
   databases: {
+    retrieve: (args: {
+      database_id: string;
+    }) => Promise<NotionDatabaseRetrieveResponse>;
+  };
+  dataSources: {
     query: (args: NotionQueryArgs) => Promise<NotionQueryResponse>;
   };
 }
@@ -154,25 +184,61 @@ export function pageToEvent(
   return event;
 }
 
-// 100 is the documented maximum page_size for Notion's databases.query endpoint.
+// Notion-documented maximum for dataSources.query.
 const NOTION_PAGE_SIZE_MAX = 100;
+
+// Look up the data source ID for a given Notion database. Even legacy
+// single-source databases (the common case in Notion today) need this
+// indirection under the 2025-09-03 API. Called once per calendar at
+// startup; the result is cached.
+//
+// Distinguishes the two no-data-source cases so the operator can triage:
+// - data_sources undefined → SDK returned PartialDatabaseObjectResponse,
+//   which means the integration lacks read access on this database.
+// - data_sources empty array → connected, but Notion provisioned the
+//   database without a data source (a Notion-side anomaly).
+export async function resolveDataSourceId(
+  client: NotionQueryClient,
+  databaseId: string,
+): Promise<string> {
+  const db = await client.databases.retrieve({ database_id: databaseId });
+  if (db.data_sources === undefined) {
+    throw new Error(
+      `Notion database ${databaseId} returned a partial response — the integration likely does not have read access to it. Check the database's Connections in Notion.`,
+    );
+  }
+  const first = db.data_sources[0];
+  if (!first) {
+    throw new Error(
+      `Notion database ${databaseId} has zero data sources — this is unexpected for a normal database and may indicate a Notion-side issue.`,
+    );
+  }
+  return first.id;
+}
 
 export async function fetchEvents(
   client: NotionQueryClient,
   calendar: CalendarConfig,
+  dataSourceId: string,
 ): Promise<CalendarEvent[]> {
   const events: CalendarEvent[] = [];
   let cursor: string | undefined;
 
   do {
     const args: NotionQueryArgs = {
-      database_id: calendar.databaseId,
+      data_source_id: dataSourceId,
       page_size: NOTION_PAGE_SIZE_MAX,
     };
-    if (calendar.filter !== undefined) args.filter = calendar.filter;
+    if (calendar.filter !== undefined) {
+      // calendar.filter comes from YAML and is typed as Record<string, unknown>.
+      // We don't validate its shape — Notion will reject malformed filters
+      // at request time with a clear message. The cast bridges our loose
+      // YAML type and the SDK's strict discriminated union.
+      args.filter = calendar.filter as SDKQueryArgs['filter'];
+    }
     if (cursor !== undefined) args.start_cursor = cursor;
 
-    const response = await client.databases.query(args);
+    const response = await client.dataSources.query(args);
 
     for (const page of response.results) {
       const event = pageToEvent(page, calendar);
