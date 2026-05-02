@@ -1,0 +1,116 @@
+name: Bug report
+description: Something isn't working as documented.
+title: "bug: <short description>"
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report. Please fill in as much
+        as you can — vague reports are hard to act on. **Do not paste real
+        Notion tokens or full database IDs** anywhere in this issue.
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Release tag (e.g. `v1.0.0`) or commit hash from `git rev-parse HEAD` inside your checkout.
+      placeholder: v1.0.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How are you running it?
+      options:
+        - Docker (docker compose up)
+        - Docker (plain docker run)
+        - Node directly (pnpm dev / pnpm start)
+        - Other (describe in "Additional context")
+    validations:
+      required: true
+
+  - type: dropdown
+    id: client
+    attributes:
+      label: Which calendar client is subscribing?
+      multiple: true
+      options:
+        - Apple Calendar (macOS / iOS)
+        - Google Calendar
+        - Outlook (desktop)
+        - Outlook (web / Microsoft 365)
+        - Fantastical
+        - Thunderbird
+        - Other
+        - Not applicable (the bug is server-side)
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: What did you expect, and what did you observe instead?
+      placeholder: |
+        Expected: ...
+        Got: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps. The smaller the repro, the faster the fix.
+      placeholder: |
+        1. With config.yaml below...
+        2. Subscribe from <client>...
+        3. See <wrong behavior>
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Redacted `config.yaml` snippet
+      description: |
+        Paste the relevant calendar entry. **Replace token values with `REDACTED`
+        and replace database IDs with placeholders like `db_xxx`.**
+      render: yaml
+      placeholder: |
+        calendars:
+          - slug: example
+            databaseId: db_xxx
+            timezone: Europe/Amsterdam
+            dateProperty: Date
+            titleProperty: Name
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Server logs around the time of the failure. Redact tokens.
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: notion-properties
+    attributes:
+      label: Notion property types involved
+      description: |
+        e.g. "Date is a `date` property with start+end; Name is `title`."
+        Most bugs come from property-type mismatches.
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+    validations:
+      required: false

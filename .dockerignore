@@ -1,0 +1,60 @@
+# Build artifacts and dependencies — re-installed inside the image.
+node_modules/
+.pnpm-store/
+dist/
+build/
+*.tsbuildinfo
+
+# Tests, coverage, fixtures — not needed at runtime.
+test/
+coverage/
+.nyc_output/
+.vitest-cache/
+
+# Secrets and host-side config — must never be baked into the image.
+.env
+.env.*
+config.yaml
+
+# Git, GitHub, and CI metadata.
+.git/
+.gitignore
+.gitattributes
+.github/
+
+# Editor and OS noise.
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Caches.
+.cache/
+.parcel-cache/
+.eslintcache
+
+# Logs and tarballs.
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+*.tar
+
+# Docs and project meta — not needed by the runtime stage.
+*.md
+docs/
+LICENSE
+Initial plan.md
+
+# Docker bookkeeping (avoid recursive copy).
+Dockerfile
+Dockerfile.*
+docker-compose*.yml
+.dockerignore
+
+# Local Claude Code state.
+.claude/
