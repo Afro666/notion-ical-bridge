@@ -1,6 +1,6 @@
 import { Client } from '@notionhq/client';
 import { loadConfig } from './config.js';
-import type { NotionQueryClient } from './notion.js';
+import { resolveDataSourceId, type NotionQueryClient } from './notion.js';
 import { createServer } from './server.js';
 
 function parsePort(raw: string | undefined): number {
@@ -47,6 +47,11 @@ async function main(): Promise<void> {
   const config = loadConfig(configPath);
 
   const notionClients = new Map<string, NotionQueryClient>();
+  // Notion API 2025-09-03 splits databases into wrappers + data sources.
+  // We resolve each calendar's data source ID once at startup so request
+  // path stays a single dataSources.query call. Failures here (no integration
+  // access, wrong DB ID, network) abort startup loudly via the main() catch.
+  const dataSourceIds = new Map<string, string>();
   for (const cal of config.calendars) {
     const auth = cal.accessToken ?? defaultToken;
     if (!auth) {
@@ -54,18 +59,19 @@ async function main(): Promise<void> {
         `Calendar "${cal.slug}" needs accessToken in config.yaml or NOTION_TOKEN env var`,
       );
     }
-    // Client is structurally compatible with NotionQueryClient for the
-    // methods we use (databases.query). Cast through unknown to bypass TS
-    // variance on the SDK's wider parameter shape.
-    notionClients.set(
-      cal.slug,
-      new Client({ auth }) as unknown as NotionQueryClient,
-    );
+    // No `as unknown as` cast: Client structurally satisfies
+    // NotionQueryClient. The conformance is guarded at build time by
+    // test/notion.types.test.ts so SDK drift fails tsc, not production.
+    const client: NotionQueryClient = new Client({ auth });
+    const dataSourceId = await resolveDataSourceId(client, cal.databaseId);
+    notionClients.set(cal.slug, client);
+    dataSourceIds.set(cal.slug, dataSourceId);
   }
 
   const app = createServer({
     config,
     notionClients,
+    dataSourceIds,
     logger: { level: logLevel },
   });
 

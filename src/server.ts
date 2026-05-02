@@ -20,6 +20,10 @@ export interface ServerDeps {
   // Map keyed by calendar slug. index.ts pre-resolves auth tokens at startup
   // so the server itself never sees a raw Notion token.
   notionClients: Map<string, NotionQueryClient>;
+  // Map keyed by calendar slug. index.ts resolves database_id → data_source_id
+  // once per calendar at startup via `databases.retrieve` (Notion API
+  // 2025-09-03 split). Querying rows requires the data source ID.
+  dataSourceIds: Map<string, string>;
   logger?: boolean | FastifyLoggerOptions;
 }
 
@@ -233,6 +237,18 @@ export function createServer(deps: ServerDeps): FastifyInstance {
           reply.code(503);
           return 'Service Unavailable';
         }
+        const dataSourceId = deps.dataSourceIds.get(slug);
+        if (!dataSourceId) {
+          // Configuration bug: client wired but data source resolution
+          // either failed at startup or was never attempted. Same 503
+          // semantics as a missing client.
+          req.log.error(
+            { slug },
+            'No Notion data source ID registered for calendar',
+          );
+          reply.code(503);
+          return 'Service Unavailable';
+        }
 
         let pending = inFlight.get(slug);
         if (pending === undefined) {
@@ -242,7 +258,7 @@ export function createServer(deps: ServerDeps): FastifyInstance {
           // passed only scoped fields rather than the raw error tree.
           pending = (async () => {
             try {
-              const result = await fetchEvents(client, calendar);
+              const result = await fetchEvents(client, calendar, dataSourceId);
               cache.set(slug, result, calendar.cacheTtlSeconds);
               return result;
             } catch (err) {

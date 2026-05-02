@@ -7,6 +7,8 @@ import {
   extractUrl,
   pageToEvent,
   fetchEvents,
+  resolveDataSourceId,
+  type NotionDatabaseRetrieveResponse,
   type NotionQueryClient,
   type NotionQueryResponse,
 } from '../src/notion.js';
@@ -356,15 +358,56 @@ describe('pageToEvent', () => {
   });
 });
 
+describe('resolveDataSourceId', () => {
+  function makeRetrieveClient(response: NotionDatabaseRetrieveResponse) {
+    const retrieve = vi.fn().mockResolvedValue(response);
+    const client: NotionQueryClient = {
+      databases: { retrieve },
+      dataSources: { query: vi.fn() },
+    };
+    return { client, retrieve };
+  }
+
+  it('returns the first data_sources[].id', async () => {
+    const { client, retrieve } = makeRetrieveClient({
+      data_sources: [{ id: 'ds-primary' }, { id: 'ds-secondary' }],
+    });
+    const id = await resolveDataSourceId(client, 'db_abc');
+    expect(id).toBe('ds-primary');
+    expect(retrieve).toHaveBeenCalledWith({ database_id: 'db_abc' });
+  });
+
+  it('throws when data_sources is empty', async () => {
+    const { client } = makeRetrieveClient({ data_sources: [] });
+    await expect(resolveDataSourceId(client, 'db_abc')).rejects.toThrow(
+      /no data sources/i,
+    );
+  });
+
+  it('propagates SDK rejection (e.g. unauthorized)', async () => {
+    const retrieve = vi.fn().mockRejectedValue(new Error('Unauthorized'));
+    const client: NotionQueryClient = {
+      databases: { retrieve },
+      dataSources: { query: vi.fn() },
+    };
+    await expect(resolveDataSourceId(client, 'db_abc')).rejects.toThrow(
+      'Unauthorized',
+    );
+  });
+});
+
 describe('fetchEvents', () => {
   function makeMockClient(responses: NotionQueryResponse[]) {
     const query = vi.fn();
     responses.forEach((r) => query.mockResolvedValueOnce(r));
-    const client: NotionQueryClient = { databases: { query } };
+    const client: NotionQueryClient = {
+      databases: { retrieve: vi.fn() },
+      dataSources: { query },
+    };
     return { client, query };
   }
 
-  it('passes database_id and filter to databases.query', async () => {
+  it('passes data_source_id and filter to dataSources.query', async () => {
     const cal = makeCalendar({
       databaseId: 'db_xyz',
       filter: { property: 'Status', select: { equals: 'Confirmed' } },
@@ -372,11 +415,11 @@ describe('fetchEvents', () => {
     const { client, query } = makeMockClient([
       { results: [], has_more: false, next_cursor: null },
     ]);
-    await fetchEvents(client, cal);
+    await fetchEvents(client, cal, 'ds_xyz');
     expect(query).toHaveBeenCalledTimes(1);
     expect(query).toHaveBeenCalledWith(
       expect.objectContaining({
-        database_id: 'db_xyz',
+        data_source_id: 'ds_xyz',
         filter: { property: 'Status', select: { equals: 'Confirmed' } },
       }),
     );
@@ -409,7 +452,7 @@ describe('fetchEvents', () => {
       { results: [page1], has_more: true, next_cursor: 'cursor-1' },
       { results: [page2], has_more: false, next_cursor: null },
     ]);
-    const events = await fetchEvents(client, makeCalendar());
+    const events = await fetchEvents(client, makeCalendar(), 'ds_test');
     expect(events).toHaveLength(2);
     expect(events.map((e) => e.id)).toEqual(['a', 'b']);
     expect(query).toHaveBeenCalledTimes(2);
@@ -445,16 +488,16 @@ describe('fetchEvents', () => {
         next_cursor: null,
       },
     ]);
-    const events = await fetchEvents(client, makeCalendar());
+    const events = await fetchEvents(client, makeCalendar(), 'ds_test');
     expect(events).toHaveLength(1);
     expect(events[0]!.id).toBe('a');
   });
 
-  it('returns empty array when database has no pages', async () => {
+  it('returns empty array when data source has no pages', async () => {
     const { client } = makeMockClient([
       { results: [], has_more: false, next_cursor: null },
     ]);
-    const events = await fetchEvents(client, makeCalendar());
+    const events = await fetchEvents(client, makeCalendar(), 'ds_test');
     expect(events).toEqual([]);
   });
 
@@ -462,7 +505,7 @@ describe('fetchEvents', () => {
     const { client, query } = makeMockClient([
       { results: [], has_more: false, next_cursor: null },
     ]);
-    await fetchEvents(client, makeCalendar());
+    await fetchEvents(client, makeCalendar(), 'ds_test');
     expect(query.mock.calls[0]![0]).not.toHaveProperty('filter');
   });
 
@@ -470,7 +513,7 @@ describe('fetchEvents', () => {
     const { client, query } = makeMockClient([
       { results: [], has_more: true, next_cursor: null },
     ]);
-    const events = await fetchEvents(client, makeCalendar());
+    const events = await fetchEvents(client, makeCalendar(), 'ds_test');
     expect(events).toEqual([]);
     expect(query).toHaveBeenCalledTimes(1);
   });
@@ -507,14 +550,17 @@ describe('fetchEvents', () => {
       { results: [validP1], has_more: true, next_cursor: 'cursor-1' },
       { results: [validP2, skippedP2], has_more: false, next_cursor: null },
     ]);
-    const events = await fetchEvents(client, makeCalendar());
+    const events = await fetchEvents(client, makeCalendar(), 'ds_test');
     expect(events.map((e) => e.id)).toEqual(['a', 'b']);
   });
 
-  it('propagates rejection from databases.query to the caller', async () => {
+  it('propagates rejection from dataSources.query to the caller', async () => {
     const query = vi.fn().mockRejectedValue(new Error('Notion API down'));
-    const client: NotionQueryClient = { databases: { query } };
-    await expect(fetchEvents(client, makeCalendar())).rejects.toThrow(
+    const client: NotionQueryClient = {
+      databases: { retrieve: vi.fn() },
+      dataSources: { query },
+    };
+    await expect(fetchEvents(client, makeCalendar(), 'ds_test')).rejects.toThrow(
       'Notion API down',
     );
   });
