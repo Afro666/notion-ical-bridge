@@ -105,13 +105,49 @@ interface SlugRouteParams {
   filename: string;
 }
 
+// Cache-Control max-age served alongside a stale fallback body. We don't want
+// clients to lock onto a stale response for the calendar's full TTL — pick a
+// short value so a successful refresh on the next poll wins quickly.
+const STALE_CACHE_MAX_AGE_SECONDS = 30;
+
+interface ResolvedRoute {
+  slug: string;
+  token?: string;
+}
+
+function resolveRoute(
+  filename: string,
+  slugsByLengthDesc: readonly string[],
+): ResolvedRoute | undefined {
+  if (!filename.endsWith('.ics')) return undefined;
+  const base = filename.slice(0, -'.ics'.length);
+  // Iterate slugs longest-first so a calendar named `team-alpha` wins over
+  // `team` for the URL `/team-alpha.ics` — otherwise the request would be
+  // mis-parsed as slug=team, token=alpha.
+  for (const slug of slugsByLengthDesc) {
+    if (base === slug) return { slug };
+    if (base.startsWith(`${slug}-`)) {
+      const token = base.slice(slug.length + 1);
+      if (token.length > 0) return { slug, token };
+    }
+  }
+  return undefined;
+}
+
 export function createServer(deps: ServerDeps): FastifyInstance {
   const app = Fastify({
     logger: deps.logger ?? false,
+    // The default Fastify request log echoes req.url at info level, which
+    // would write the per-subscriber token to stdout on every request. We
+    // emit our own scoped error logs in the handler instead.
+    disableRequestLogging: true,
   });
 
   const calendarsBySlug = new Map(
     deps.config.calendars.map((c) => [c.slug, c] as const),
+  );
+  const slugsByLengthDesc = [...calendarsBySlug.keys()].sort(
+    (a, b) => b.length - a.length,
   );
   const cache = new TTLCache<CalendarEvent[]>();
   // Single-flight: when N concurrent requests miss the cache for the same
@@ -137,19 +173,35 @@ export function createServer(deps: ServerDeps): FastifyInstance {
       req: FastifyRequest<{ Params: SlugRouteParams }>,
       reply: FastifyReply,
     ) => {
-      const { filename } = req.params;
-      if (!filename.endsWith('.ics')) {
+      const resolved = resolveRoute(req.params.filename, slugsByLengthDesc);
+      if (!resolved) {
         reply.code(404);
         return 'Not Found';
       }
-      const slug = filename.slice(0, -'.ics'.length);
+      const { slug, token } = resolved;
       const calendar = calendarsBySlug.get(slug);
       if (!calendar) {
         reply.code(404);
         return 'Not Found';
       }
 
+      // Token gate. We never return 401 — that would confirm the calendar
+      // exists to anonymous probes. Always 404 on any auth mismatch so that
+      // protected calendars are indistinguishable from non-existent ones.
+      if (calendar.tokens !== undefined) {
+        if (token === undefined || !calendar.tokens.includes(token)) {
+          reply.code(404);
+          return 'Not Found';
+        }
+      } else if (token !== undefined) {
+        // Calendar isn't token-protected; a hyphen-suffix request can't be
+        // valid for it.
+        reply.code(404);
+        return 'Not Found';
+      }
+
       let events = cache.get(slug);
+      let servedStale = false;
       if (events === undefined) {
         const client = deps.notionClients.get(slug);
         if (!client) {
@@ -187,14 +239,33 @@ export function createServer(deps: ServerDeps): FastifyInstance {
             },
             'Failed to fetch events from Notion',
           );
-          reply.code(503);
-          return 'Service Unavailable';
+          // Stale-cache fallback: serve the last good body if we have one,
+          // so a transient Notion outage doesn't break every subscriber's
+          // calendar at once.
+          const stale = cache.getStale(slug);
+          if (stale === undefined) {
+            reply.code(503);
+            return 'Service Unavailable';
+          }
+          events = stale;
+          servedStale = true;
         }
       }
 
       const ics = buildIcalFeed(events, calendar);
       reply.type('text/calendar; charset=utf-8');
-      reply.header('Cache-Control', `public, max-age=${calendar.cacheTtlSeconds}`);
+      if (servedStale) {
+        reply.header('X-Cache', 'stale');
+        reply.header(
+          'Cache-Control',
+          `public, max-age=${STALE_CACHE_MAX_AGE_SECONDS}`,
+        );
+      } else {
+        reply.header(
+          'Cache-Control',
+          `public, max-age=${calendar.cacheTtlSeconds}`,
+        );
+      }
       return ics;
     },
   );
