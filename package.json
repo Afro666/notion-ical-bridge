@@ -43,6 +43,7 @@
   },
   "packageManager": "pnpm@10.33.2",
   "dependencies": {
+    "@notionhq/client": "^5.20.0",
     "yaml": "^2.8.4",
     "zod": "^4.4.2"
   }
