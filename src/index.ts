@@ -19,7 +19,7 @@ async function main(): Promise<void> {
   const host = process.env.HOST ?? '0.0.0.0';
   const port = parsePort(process.env.PORT);
   const defaultToken = process.env.NOTION_TOKEN;
-  const nodeEnv = process.env.NODE_ENV ?? 'development';
+  const logLevel = process.env.LOG_LEVEL ?? 'info';
 
   const config = loadConfig(configPath);
 
@@ -43,7 +43,7 @@ async function main(): Promise<void> {
   const app = createServer({
     config,
     notionClients,
-    logger: nodeEnv === 'production' ? true : { level: 'info' },
+    logger: { level: logLevel },
   });
 
   await app.listen({ host, port });
