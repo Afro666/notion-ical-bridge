@@ -121,6 +121,40 @@ describe('buildIcalFeed - all-day events', () => {
     expect(ics).toMatch(/DTEND;VALUE=DATE:20260505/);
   });
 
+  it('emits correct DTEND across a DST spring-forward boundary (single-day)', () => {
+    // 2026-03-08 is the day America/New_York advances clocks 02:00 -> 03:00.
+    // UTC arithmetic in buildEventDates avoids the wall-clock skew.
+    const ics = buildIcalFeed(
+      [
+        makeEvent({
+          id: 'dst-spring-single',
+          isAllDay: true,
+          start: '2026-03-08',
+          end: undefined,
+        }),
+      ],
+      makeCalendar({ timezone: 'America/New_York' }),
+    );
+    expect(ics).toMatch(/DTSTART;VALUE=DATE:20260308/);
+    expect(ics).toMatch(/DTEND;VALUE=DATE:20260309/);
+  });
+
+  it('emits correct DTEND across a DST spring-forward boundary (range)', () => {
+    const ics = buildIcalFeed(
+      [
+        makeEvent({
+          id: 'dst-spring-range',
+          isAllDay: true,
+          start: '2026-03-07',
+          end: '2026-03-09',
+        }),
+      ],
+      makeCalendar({ timezone: 'America/New_York' }),
+    );
+    expect(ics).toMatch(/DTSTART;VALUE=DATE:20260307/);
+    expect(ics).toMatch(/DTEND;VALUE=DATE:20260310/);
+  });
+
   it('does not emit a time component for all-day events', () => {
     const ics = buildIcalFeed(
       [
@@ -153,6 +187,22 @@ describe('buildIcalFeed - timed events', () => {
     );
     expect(ics).toMatch(/DTSTART[^\r\n]*:\d{8}T\d{6}/);
     expect(ics).toMatch(/DTEND[^\r\n]*:\d{8}T\d{6}/);
+  });
+
+  it('emits correct DTEND for timed event spanning two calendar dates', () => {
+    const ics = buildIcalFeed(
+      [
+        makeEvent({
+          id: 'cross-midnight',
+          isAllDay: false,
+          start: '2026-05-02T22:00:00.000Z',
+          end: '2026-05-03T02:00:00.000Z',
+        }),
+      ],
+      makeCalendar({ timezone: 'UTC' }),
+    );
+    expect(ics).toMatch(/DTSTART[^:]*:20260502T220000/);
+    expect(ics).toMatch(/DTEND[^:]*:20260503T020000/);
   });
 
   it('defaults to a 1-hour duration when timed event has no end', () => {
@@ -199,8 +249,6 @@ describe('buildIcalFeed - event metadata', () => {
     );
     expect(ics).toContain('DESCRIPTION:Bring laptop');
     expect(ics).toContain('LOCATION:Room A');
-    // ical-generator emits URL with the explicit VALUE=URI parameter; both
-    // forms are valid per RFC 5545. Match the value rather than the prefix.
     expect(ics).toMatch(/URL[^\r\n]*:https:\/\/example\.com\/meet/);
   });
 
@@ -252,6 +300,77 @@ describe('buildIcalFeed - RFC 5545 escaping', () => {
       makeCalendar(),
     );
     expect(ics).toContain('SUMMARY:Back\\\\slash');
+  });
+});
+
+describe('buildIcalFeed - invalid input safety', () => {
+  function assertThrowsWith(
+    fn: () => unknown,
+    fragments: readonly string[],
+  ): void {
+    try {
+      fn();
+      expect.fail('expected function to throw');
+    } catch (err) {
+      const message = (err as Error).message;
+      for (const fragment of fragments) {
+        expect(message).toContain(fragment);
+      }
+    }
+  }
+
+  it('throws a clear error citing the event id when all-day start is unparseable', () => {
+    assertThrowsWith(
+      () =>
+        buildIcalFeed(
+          [
+            makeEvent({
+              id: 'bad-allday',
+              isAllDay: true,
+              start: 'not-a-date',
+              end: undefined,
+            }),
+          ],
+          makeCalendar(),
+        ),
+      ['bad-allday', 'not-a-date'],
+    );
+  });
+
+  it('throws a clear error citing the event id when timed start is unparseable', () => {
+    assertThrowsWith(
+      () =>
+        buildIcalFeed(
+          [
+            makeEvent({
+              id: 'bad-timed',
+              isAllDay: false,
+              start: 'definitely not iso',
+              end: undefined,
+            }),
+          ],
+          makeCalendar(),
+        ),
+      ['bad-timed', 'definitely not iso'],
+    );
+  });
+
+  it('throws a clear error when timed end is unparseable', () => {
+    assertThrowsWith(
+      () =>
+        buildIcalFeed(
+          [
+            makeEvent({
+              id: 'bad-end',
+              isAllDay: false,
+              start: '2026-05-02T14:00:00.000Z',
+              end: 'invalid-end',
+            }),
+          ],
+          makeCalendar(),
+        ),
+      ['bad-end', 'invalid-end'],
+    );
   });
 });
 

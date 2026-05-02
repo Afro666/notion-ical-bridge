@@ -11,22 +11,38 @@ interface IcalEventDates {
   end: Date;
 }
 
+function parseDate(value: string, label: string, eventId: string): Date {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) {
+    throw new Error(
+      `Invalid ${label} date "${value}" on event ${eventId}; expected YYYY-MM-DD or ISO 8601 datetime`,
+    );
+  }
+  return d;
+}
+
 function buildEventDates(event: CalendarEvent): IcalEventDates {
   if (event.isAllDay) {
-    // Notion sends "YYYY-MM-DD"; constructing a Date with explicit T00:00:00
-    // (no Z) yields local midnight, which ical-generator then formats as a
-    // pure DATE value (no timestamp).
-    const start = new Date(`${event.start}T00:00:00`);
-    // Notion's range end is INCLUSIVE; RFC 5545 DTEND for VALUE=DATE is EXCLUSIVE.
-    // Single-day all-day events also need DTEND = start + 1 day.
-    const inclusiveEnd = event.end ? new Date(`${event.end}T00:00:00`) : start;
+    // Anchor all-day Dates to UTC midnight (the trailing Z) so the calendar
+    // day is host-timezone independent. Without Z, JS parses as local time —
+    // a UTC-12 host shifts the day backward; on DST transitions, +ONE_DAY_MS
+    // produces 23h or 25h instead of one calendar day. UTC has no DST, so
+    // millisecond arithmetic between UTC midnights is always exact.
+    const start = parseDate(`${event.start}T00:00:00Z`, 'all-day start', event.id);
+    // Notion range end is INCLUSIVE; RFC 5545 DTEND for VALUE=DATE is EXCLUSIVE.
+    // Single-day all-day events therefore also need DTEND = start + 1 day.
+    const inclusiveEnd = event.end
+      ? parseDate(`${event.end}T00:00:00Z`, 'all-day end', event.id)
+      : start;
     const end = new Date(inclusiveEnd.getTime() + ONE_DAY_MS);
     return { allDay: true, start, end };
   }
 
-  const start = new Date(event.start);
+  const start = parseDate(event.start, 'timed start', event.id);
+  // 1 hour is the convention for timed events with no explicit end. Notion
+  // permits this; calendar clients render it as a 1-hour block.
   const end = event.end
-    ? new Date(event.end)
+    ? parseDate(event.end, 'timed end', event.id)
     : new Date(start.getTime() + ONE_HOUR_MS);
   return { allDay: false, start, end };
 }
