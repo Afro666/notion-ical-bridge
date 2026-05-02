@@ -29,10 +29,13 @@ ENV NODE_ENV=production \
 
 WORKDIR /app
 
-# Copy only what the runtime needs.
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/package.json ./package.json
+# Copy only what the runtime needs. --chown=node:node ensures the files
+# are owned by the unprivileged user we drop to below — without it they
+# land as root:root and any future permission-tightening would silently
+# break the runtime.
+COPY --chown=node:node --from=builder /app/node_modules ./node_modules
+COPY --chown=node:node --from=builder /app/dist ./dist
+COPY --chown=node:node --from=builder /app/package.json ./package.json
 
 # Run as the unprivileged `node` user (UID 1000) baked into node:alpine.
 USER node

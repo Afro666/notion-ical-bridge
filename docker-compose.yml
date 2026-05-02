@@ -11,8 +11,9 @@ services:
     ports:
       - "3000:3000"
 
-    # config.yaml is mounted read-only from the host. Copy it from
-    # config.example.yaml and edit before first `docker compose up`.
+    # config.yaml is mounted read-only from the host. Create your own
+    # before first `docker compose up`; a config.example.yaml template
+    # ships in a later release.
     volumes:
       - ./config.yaml:/app/config.yaml:ro
 
