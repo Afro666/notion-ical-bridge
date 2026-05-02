@@ -13,7 +13,7 @@ export interface CalendarEvent {
 
 export interface NotionQueryArgs {
   database_id: string;
-  filter?: unknown;
+  filter?: Record<string, unknown>;
   start_cursor?: string;
   page_size?: number;
 }
@@ -24,8 +24,6 @@ export interface NotionQueryResponse {
   next_cursor: string | null;
 }
 
-// Minimal structural interface covering the only Notion SDK call we make.
-// Decouples this module from @notionhq/client internals and makes mocking trivial.
 export interface NotionQueryClient {
   databases: {
     query: (args: NotionQueryArgs) => Promise<NotionQueryResponse>;
@@ -71,6 +69,12 @@ export function extractRichText(prop: unknown): string | null {
   return text.length > 0 ? text : null;
 }
 
+// Notion emits exactly two date formats: extended "YYYY-MM-DD" for all-day
+// events and full ISO 8601 (with 'T') for timed. Strings outside both shapes
+// would be ambiguous (e.g. "2026-05-02+00:00" has no T and is not date-only),
+// so we reject them rather than guess.
+const ISO_DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 export function extractDate(prop: unknown): ExtractedDate | null {
   if (typeof prop !== 'object' || prop === null) return null;
   const p = prop as { type?: unknown; date?: unknown };
@@ -78,9 +82,11 @@ export function extractDate(prop: unknown): ExtractedDate | null {
   if (typeof p.date !== 'object' || p.date === null) return null;
   const d = p.date as { start?: unknown; end?: unknown };
   if (typeof d.start !== 'string' || d.start.length === 0) return null;
-  // Presence of 'T' in the ISO string distinguishes timed events from all-day.
-  // Notion emits "YYYY-MM-DD" for all-day and full ISO 8601 for timed.
-  const isAllDay = !d.start.includes('T');
+
+  const isAllDay = ISO_DATE_ONLY_RE.test(d.start);
+  const isTimed = d.start.includes('T');
+  if (!isAllDay && !isTimed) return null;
+
   const end = typeof d.end === 'string' && d.end.length > 0 ? d.end : null;
   return { start: d.start, end, isAllDay };
 }
@@ -148,6 +154,7 @@ export function pageToEvent(
   return event;
 }
 
+// 100 is the documented maximum page_size for Notion's databases.query endpoint.
 const NOTION_PAGE_SIZE_MAX = 100;
 
 export async function fetchEvents(

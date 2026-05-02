@@ -128,6 +128,33 @@ describe('extractDate', () => {
       extractDate({ type: 'date', date: { start: '', end: null, time_zone: null } }),
     ).toBeNull();
   });
+
+  it('returns null for ambiguous formats: TZ-offset without T (e.g. "2026-05-02+00:00")', () => {
+    expect(
+      extractDate({
+        type: 'date',
+        date: { start: '2026-05-02+00:00', end: null, time_zone: null },
+      }),
+    ).toBeNull();
+  });
+
+  it('returns null for compact ISO dates (e.g. "20260502")', () => {
+    expect(
+      extractDate({
+        type: 'date',
+        date: { start: '20260502', end: null, time_zone: null },
+      }),
+    ).toBeNull();
+  });
+
+  it('returns null for arbitrary non-date strings', () => {
+    expect(
+      extractDate({
+        type: 'date',
+        date: { start: 'not-a-date', end: null, time_zone: null },
+      }),
+    ).toBeNull();
+  });
 });
 
 describe('extractSelect', () => {
@@ -253,6 +280,61 @@ describe('pageToEvent', () => {
     expect(event).not.toHaveProperty('description');
     expect(event).not.toHaveProperty('url');
     expect(event).not.toHaveProperty('end');
+  });
+
+  it('returns null when page is not an object', () => {
+    expect(pageToEvent('not-a-page', makeCalendar())).toBeNull();
+    expect(pageToEvent(null, makeCalendar())).toBeNull();
+    expect(pageToEvent(42, makeCalendar())).toBeNull();
+  });
+
+  it('returns null when page is missing id', () => {
+    const page = {
+      properties: {
+        Name: { type: 'title', title: [{ plain_text: 'No ID' }] },
+        Date: {
+          type: 'date',
+          date: { start: '2026-05-02', end: null, time_zone: null },
+        },
+      },
+    };
+    expect(pageToEvent(page, makeCalendar())).toBeNull();
+  });
+
+  it('returns null when page is missing properties', () => {
+    expect(pageToEvent({ id: 'p-no-props' }, makeCalendar())).toBeNull();
+  });
+
+  it('resolves location from a title-typed property when configured', () => {
+    const cal = makeCalendar({ locationProperty: 'Where' });
+    const page = {
+      id: 'p-loc-title',
+      properties: {
+        Name: { type: 'title', title: [{ plain_text: 'Event' }] },
+        Date: {
+          type: 'date',
+          date: { start: '2026-05-02', end: null, time_zone: null },
+        },
+        Where: { type: 'title', title: [{ plain_text: 'Main Hall' }] },
+      },
+    };
+    expect(pageToEvent(page, cal)?.location).toBe('Main Hall');
+  });
+
+  it('resolves location from a select-typed property when configured', () => {
+    const cal = makeCalendar({ locationProperty: 'Venue' });
+    const page = {
+      id: 'p-loc-select',
+      properties: {
+        Name: { type: 'title', title: [{ plain_text: 'Event' }] },
+        Date: {
+          type: 'date',
+          date: { start: '2026-05-02', end: null, time_zone: null },
+        },
+        Venue: { type: 'select', select: { name: 'Cafe' } },
+      },
+    };
+    expect(pageToEvent(page, cal)?.location).toBe('Cafe');
   });
 
   it('includes end when date range is present', () => {
@@ -382,5 +464,58 @@ describe('fetchEvents', () => {
     ]);
     await fetchEvents(client, makeCalendar());
     expect(query.mock.calls[0]![0]).not.toHaveProperty('filter');
+  });
+
+  it('terminates the loop when has_more is true but next_cursor is null', async () => {
+    const { client, query } = makeMockClient([
+      { results: [], has_more: true, next_cursor: null },
+    ]);
+    const events = await fetchEvents(client, makeCalendar());
+    expect(events).toEqual([]);
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
+  it('accumulates events across pages when later pages contain skipped entries', async () => {
+    const validP1 = {
+      id: 'a',
+      properties: {
+        Name: { type: 'title', title: [{ plain_text: 'A' }] },
+        Date: {
+          type: 'date',
+          date: { start: '2026-05-01', end: null, time_zone: null },
+        },
+      },
+    };
+    const validP2 = {
+      id: 'b',
+      properties: {
+        Name: { type: 'title', title: [{ plain_text: 'B' }] },
+        Date: {
+          type: 'date',
+          date: { start: '2026-05-02', end: null, time_zone: null },
+        },
+      },
+    };
+    const skippedP2 = {
+      id: 'c',
+      properties: {
+        Name: { type: 'title', title: [{ plain_text: 'No Date' }] },
+        Date: { type: 'date', date: null },
+      },
+    };
+    const { client } = makeMockClient([
+      { results: [validP1], has_more: true, next_cursor: 'cursor-1' },
+      { results: [validP2, skippedP2], has_more: false, next_cursor: null },
+    ]);
+    const events = await fetchEvents(client, makeCalendar());
+    expect(events.map((e) => e.id)).toEqual(['a', 'b']);
+  });
+
+  it('propagates rejection from databases.query to the caller', async () => {
+    const query = vi.fn().mockRejectedValue(new Error('Notion API down'));
+    const client: NotionQueryClient = { databases: { query } };
+    await expect(fetchEvents(client, makeCalendar())).rejects.toThrow(
+      'Notion API down',
+    );
   });
 });
