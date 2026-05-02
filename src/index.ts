@@ -14,12 +14,35 @@ function parsePort(raw: string | undefined): number {
   return port;
 }
 
+const VALID_LOG_LEVELS = [
+  'trace',
+  'debug',
+  'info',
+  'warn',
+  'error',
+  'fatal',
+  'silent',
+] as const;
+
+function parseLogLevel(raw: string | undefined): string {
+  const value = raw ?? 'info';
+  if (!(VALID_LOG_LEVELS as readonly string[]).includes(value)) {
+    // Pino throws on unknown levels with an opaque message that gives no
+    // hint about which env var caused it. Catch it here so the error
+    // points at LOG_LEVEL directly.
+    throw new Error(
+      `Invalid LOG_LEVEL="${value}" — must be one of: ${VALID_LOG_LEVELS.join(', ')}`,
+    );
+  }
+  return value;
+}
+
 async function main(): Promise<void> {
   const configPath = process.env.CONFIG_PATH ?? './config.yaml';
   const host = process.env.HOST ?? '0.0.0.0';
   const port = parsePort(process.env.PORT);
   const defaultToken = process.env.NOTION_TOKEN;
-  const nodeEnv = process.env.NODE_ENV ?? 'development';
+  const logLevel = parseLogLevel(process.env.LOG_LEVEL);
 
   const config = loadConfig(configPath);
 
@@ -43,7 +66,7 @@ async function main(): Promise<void> {
   const app = createServer({
     config,
     notionClients,
-    logger: nodeEnv === 'production' ? true : { level: 'info' },
+    logger: { level: logLevel },
   });
 
   await app.listen({ host, port });
