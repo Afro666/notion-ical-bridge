@@ -1,0 +1,53 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+config.yaml
+!config.example.yaml
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+
+# Test & coverage
+coverage/
+.nyc_output/
+
+# IDE & editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Caches
+.cache/
+.parcel-cache/
+.eslintcache
+.vitest-cache/
+
+# Docker
+*.tar
+
+# Claude Code local state
+.claude/settings.local.json
+
+# Personal scaffolding artifacts (not part of public repo)
+Initial plan.md
+

@@ -1,0 +1,45 @@
+{
+  "name": "notion-ical-bridge",
+  "version": "0.1.0",
+  "private": false,
+  "description": "Self-hosted HTTP server that exposes Notion databases as iCal feeds. Subscribe from any calendar app.",
+  "keywords": [
+    "notion",
+    "ical",
+    "icalendar",
+    "calendar",
+    "self-hosted",
+    "fastify",
+    "typescript"
+  ],
+  "homepage": "https://github.com/Afro666/notion-ical-bridge#readme",
+  "bugs": {
+    "url": "https://github.com/Afro666/notion-ical-bridge/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Afro666/notion-ical-bridge.git"
+  },
+  "license": "MIT",
+  "author": "Aron Wojciechowicz",
+  "type": "module",
+  "main": "dist/index.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "packageManager": "pnpm@10.33.2"
+}
