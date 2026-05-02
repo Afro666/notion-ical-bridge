@@ -174,6 +174,33 @@ calendars: []
       expect(() => parseConfig(yaml)).toThrow(/at least one calendar/i);
     });
 
+    it('rejects an empty tokens: [] array (would silently seal the calendar)', () => {
+      const yaml = `
+calendars:
+  - slug: events
+    databaseId: db_abc
+    timezone: UTC
+    dateProperty: Date
+    titleProperty: Name
+    tokens: []
+`;
+      expect(() => parseConfig(yaml)).toThrow(/tokens/i);
+    });
+
+    it('rejects a tokens array containing an empty-string token', () => {
+      const yaml = `
+calendars:
+  - slug: events
+    databaseId: db_abc
+    timezone: UTC
+    dateProperty: Date
+    titleProperty: Name
+    tokens:
+      - ""
+`;
+      expect(() => parseConfig(yaml)).toThrow(/tokens/i);
+    });
+
     it('throws ConfigValidationError with structured issues for Zod failures', () => {
       const yaml = `
 calendars:

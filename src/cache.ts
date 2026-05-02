@@ -20,8 +20,9 @@ export class TTLCache<T> {
     return entry.value;
   }
 
-  // Returns the stored value regardless of expiry. Reserved for the Phase 5
-  // stale-cache-on-failure fallback; not yet wired into the server.
+  // Returns the stored value regardless of expiry. The server uses this on
+  // upstream failure to keep serving the last good body instead of 503-ing
+  // every subscriber when Notion has a transient outage.
   getStale(key: string): T | undefined {
     return this.entries.get(key)?.value;
   }

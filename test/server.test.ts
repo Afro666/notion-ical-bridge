@@ -198,6 +198,288 @@ describe('createServer - GET /:slug.ics', () => {
   });
 });
 
+describe('createServer - token auth via /:slug-:token.ics', () => {
+  it('returns 404 for a token-protected calendar accessed without a token', async () => {
+    const { client, query } = makeStubClient(makeQueryResponse([]));
+    const calendar = makeCalendar({ slug: 'protected', tokens: ['secret-1'] });
+    const app = createServer({
+      config: { calendars: [calendar] },
+      notionClients: new Map([['protected', client]]),
+    });
+
+    const res = await app.inject({ method: 'GET', url: '/protected.ics' });
+    expect(res.statusCode).toBe(404);
+    // Bare-slug must not have triggered Notion at all — protects token-only
+    // calendars from cache-warming or rate-limit drain by anonymous probes.
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('returns 200 for a token-protected calendar accessed with a valid token', async () => {
+    const { client } = makeStubClient(
+      makeQueryResponse([samplePage('p1', 'Token Event', '2026-05-02')]),
+    );
+    const calendar = makeCalendar({ slug: 'protected', tokens: ['secret-1'] });
+    const app = createServer({
+      config: { calendars: [calendar] },
+      notionClients: new Map([['protected', client]]),
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/protected-secret-1.ics',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toMatch(/text\/calendar/);
+    expect(res.body).toContain('UID:p1');
+  });
+
+  it('returns 404 (not 401) for a wrong token — does not reveal calendar existence', async () => {
+    const { client, query } = makeStubClient(makeQueryResponse([]));
+    const calendar = makeCalendar({ slug: 'protected', tokens: ['secret-1'] });
+    const app = createServer({
+      config: { calendars: [calendar] },
+      notionClients: new Map([['protected', client]]),
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/protected-wrongtoken.ics',
+    });
+    expect(res.statusCode).toBe(404);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('accepts each token in a multi-token list independently', async () => {
+    const { client } = makeStubClient(
+      makeQueryResponse([samplePage('p1', 'A', '2026-05-02')]),
+    );
+    const calendar = makeCalendar({
+      slug: 'multi',
+      tokens: ['alpha', 'bravo', 'charlie'],
+    });
+    const app = createServer({
+      config: { calendars: [calendar] },
+      notionClients: new Map([['multi', client]]),
+    });
+
+    const r1 = await app.inject({ method: 'GET', url: '/multi-alpha.ics' });
+    const r2 = await app.inject({ method: 'GET', url: '/multi-bravo.ics' });
+    const r3 = await app.inject({ method: 'GET', url: '/multi-charlie.ics' });
+    expect(r1.statusCode).toBe(200);
+    expect(r2.statusCode).toBe(200);
+    expect(r3.statusCode).toBe(200);
+  });
+
+  it('still serves an unprotected calendar via bare /slug.ics when tokens is unset', async () => {
+    const { client } = makeStubClient(
+      makeQueryResponse([samplePage('p1', 'A', '2026-05-02')]),
+    );
+    const calendar = makeCalendar({ slug: 'open' });
+    const app = createServer({
+      config: { calendars: [calendar] },
+      notionClients: new Map([['open', client]]),
+    });
+
+    const res = await app.inject({ method: 'GET', url: '/open.ics' });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('rejects a hyphen-suffix request for an unprotected calendar with 404', async () => {
+    const { client, query } = makeStubClient(makeQueryResponse([]));
+    const calendar = makeCalendar({ slug: 'open' });
+    const app = createServer({
+      config: { calendars: [calendar] },
+      notionClients: new Map([['open', client]]),
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/open-anything.ics',
+    });
+    expect(res.statusCode).toBe(404);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('shares cache across distinct valid tokens (cache key = slug, not token)', async () => {
+    const { client, query } = makeStubClient(
+      makeQueryResponse([samplePage('p1', 'A', '2026-05-02')]),
+    );
+    const calendar = makeCalendar({
+      slug: 'shared',
+      tokens: ['alpha', 'bravo'],
+    });
+    const app = createServer({
+      config: { calendars: [calendar] },
+      notionClients: new Map([['shared', client]]),
+    });
+
+    await app.inject({ method: 'GET', url: '/shared-alpha.ics' });
+    await app.inject({ method: 'GET', url: '/shared-bravo.ics' });
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts a token that itself contains hyphens', async () => {
+    // Guards against a future refactor of resolveRoute that splits on every
+    // hyphen instead of slicing everything after the first slug- prefix.
+    // All other token-auth tests use single-segment tokens, so they would
+    // continue to pass while hyphenated tokens silently broke.
+    const { client } = makeStubClient(
+      makeQueryResponse([samplePage('p1', 'A', '2026-05-02')]),
+    );
+    const calendar = makeCalendar({
+      slug: 'events',
+      tokens: ['my-secret-token'],
+    });
+    const app = createServer({
+      config: { calendars: [calendar] },
+      notionClients: new Map([['events', client]]),
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/events-my-secret-token.ics',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain('UID:p1');
+  });
+
+  it('prefers the longest matching slug when slugs share a hyphen-prefix', async () => {
+    // Calendars `team` and `team-alpha` both exist. A request for
+    // `/team-alpha.ics` must resolve as slug=team-alpha, NOT slug=team
+    // with token=alpha.
+    const { client: clientShort } = makeStubClient(
+      makeQueryResponse([samplePage('short', 'Short Match', '2026-05-02')]),
+    );
+    const { client: clientLong } = makeStubClient(
+      makeQueryResponse([samplePage('long', 'Long Match', '2026-05-02')]),
+    );
+    const app = createServer({
+      config: {
+        calendars: [
+          makeCalendar({ slug: 'team' }),
+          makeCalendar({ slug: 'team-alpha' }),
+        ],
+      },
+      notionClients: new Map([
+        ['team', clientShort],
+        ['team-alpha', clientLong],
+      ]),
+    });
+
+    const res = await app.inject({ method: 'GET', url: '/team-alpha.ics' });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain('UID:long');
+    expect(res.body).not.toContain('UID:short');
+  });
+
+  it('does not log the token value when an invalid token is rejected', async () => {
+    const calendar = makeCalendar({
+      slug: 'protected',
+      tokens: ['the-real-secret'],
+    });
+    const logs: unknown[] = [];
+    const app = createServer({
+      config: { calendars: [calendar] },
+      notionClients: new Map(),
+      logger: {
+        level: 'info',
+        stream: {
+          write: (line: string) => {
+            logs.push(line);
+          },
+        },
+      },
+    });
+
+    await app.inject({
+      method: 'GET',
+      url: '/protected-this-is-a-guess.ics',
+    });
+    const joined = logs.map((l) => String(l)).join('\n');
+    expect(joined).not.toContain('this-is-a-guess');
+    expect(joined).not.toContain('the-real-secret');
+  });
+});
+
+describe('createServer - stale-cache fallback on Notion failure', () => {
+  it('serves stale cached events with X-Cache: stale when a refresh fails', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const query = vi
+        .fn()
+        .mockResolvedValueOnce(
+          makeQueryResponse([samplePage('p1', 'Original', '2026-05-02')]),
+        )
+        .mockRejectedValueOnce(new Error('Notion 500'));
+      const calendar = makeCalendar({ slug: 'flaky', cacheTtlSeconds: 60 });
+      const app = createServer({
+        config: { calendars: [calendar] },
+        notionClients: new Map([['flaky', { databases: { query } }]]),
+      });
+
+      // Prime the cache.
+      const fresh = await app.inject({ method: 'GET', url: '/flaky.ics' });
+      expect(fresh.statusCode).toBe(200);
+      expect(fresh.headers['x-cache']).toBeUndefined();
+
+      // Move past TTL — next request will miss and try Notion (which fails).
+      vi.advanceTimersByTime(61_000);
+
+      const stale = await app.inject({ method: 'GET', url: '/flaky.ics' });
+      expect(stale.statusCode).toBe(200);
+      expect(stale.headers['x-cache']).toBe('stale');
+      expect(stale.body).toContain('UID:p1');
+      expect(stale.body).toContain('Original');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('returns 503 when Notion fails AND no stale cache exists', async () => {
+    const query = vi.fn().mockRejectedValue(new Error('Notion 500'));
+    const calendar = makeCalendar({ slug: 'cold' });
+    const app = createServer({
+      config: { calendars: [calendar] },
+      notionClients: new Map([['cold', { databases: { query } }]]),
+    });
+
+    const res = await app.inject({ method: 'GET', url: '/cold.ics' });
+    expect(res.statusCode).toBe(503);
+    expect(res.body).toBe('Service Unavailable');
+    expect(res.headers['x-cache']).toBeUndefined();
+  });
+
+  it('emits a short Cache-Control on a stale response so clients retry sooner', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const query = vi
+        .fn()
+        .mockResolvedValueOnce(
+          makeQueryResponse([samplePage('p1', 'A', '2026-05-02')]),
+        )
+        .mockRejectedValueOnce(new Error('boom'));
+      const calendar = makeCalendar({ slug: 'flaky', cacheTtlSeconds: 600 });
+      const app = createServer({
+        config: { calendars: [calendar] },
+        notionClients: new Map([['flaky', { databases: { query } }]]),
+      });
+
+      await app.inject({ method: 'GET', url: '/flaky.ics' });
+      vi.advanceTimersByTime(601_000);
+      const stale = await app.inject({ method: 'GET', url: '/flaky.ics' });
+      // Don't tell clients to cache the stale body for the calendar's full
+      // TTL — we want them to retry sooner so the next live response wins.
+      const cc = stale.headers['cache-control'];
+      expect(cc).toBeDefined();
+      const m = String(cc).match(/max-age=(\d+)/);
+      expect(m).not.toBeNull();
+      expect(Number(m![1])).toBeLessThan(calendar.cacheTtlSeconds);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('createServer - cache TTL expiry at the route level', () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['Date'] });

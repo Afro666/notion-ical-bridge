@@ -38,7 +38,11 @@ const RawCalendarSchema = z.object({
   urlProperty: z.string().optional(),
   filter: z.record(z.string(), z.unknown()).optional(),
   accessToken: z.string().optional(),
-  tokens: z.array(z.string()).optional(),
+  // .min(1) collapses the implicit "tokens: []" sentinel: without this,
+  // an empty array would silently mean "fully sealed, no token can match"
+  // — usually a typo. Authors must either omit `tokens` (public calendar)
+  // or supply at least one non-empty token.
+  tokens: z.array(z.string().min(1)).min(1).optional(),
   cacheTtlSeconds: z.number().int().positive().optional(),
 });
 
