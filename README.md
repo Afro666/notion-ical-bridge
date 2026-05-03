@@ -69,7 +69,7 @@ The landing page has a HUUB-inspired teal palette by default. Two top-level opti
 
 | Field | Notes |
 | --- | --- |
-| `brandColor` | 6-digit hex (e.g. `'#0ca2af'`). Defaults to `#0ca2af`. Drives the page background, primary buttons, and the mobile browser's `theme-color`. |
+| `brandColor` | 6-digit hex (e.g. `'#0ca2af'`). Default lives in `DEFAULT_BRAND_COLOR` in `src/server.ts` (currently a HUUB-inspired teal). Drives the page background, primary buttons, and the mobile browser's `theme-color`. |
 | `logoUrl` | Any `http://` or `https://` URL. Renders an `<img>` next to the heading. Bring your own asset (CDN, your own static host, etc.) — the bridge does not host images. |
 
 Both are optional; omit them for the default look. The page is mobile-first and offers per-calendar one-tap subscribe buttons for iPhone / Mac / Outlook (`webcal://`) and Google Calendar (deep-link), plus a tap-to-select direct URL for everything else.

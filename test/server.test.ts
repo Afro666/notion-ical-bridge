@@ -667,11 +667,12 @@ describe('createServer - GET / (landing page) - branding', () => {
     expect(res.body.toLowerCase()).not.toContain('#0ca2af');
   });
 
-  it('escapes the brandColor value defensively before injecting into <style>', async () => {
-    // Defense-in-depth. Zod validates brandColor at config-load time, but
-    // tests construct Config directly. If brandColor ever contained a
-    // </style><script> sequence, the rendered body must not contain an
-    // unescaped <script> tag. Sentinel against any future Zod bypass.
+  it('falls back to the default brand color when a malformed value bypasses Zod (CSS-context defense)', async () => {
+    // Defense-in-depth. Zod validates brandColor as 6-digit hex at config
+    // load, but tests / dev tooling can construct Config directly.
+    // brandColor lands in <style> — HTML escaping does NOT prevent CSS
+    // injection in that context. A render-time HEX_COLOR_REGEX re-check
+    // catches bypassed values and falls back to the default.
     const app = createServer({
       config: {
         calendars: [makeCalendar({ public: true })],
@@ -681,6 +682,10 @@ describe('createServer - GET / (landing page) - branding', () => {
     });
     const res = await app.inject({ method: 'GET', url: '/' });
     expect(res.body).not.toContain('<script>alert(1)</script>');
+    // Positive assertion: prove the fallback ran rather than the
+    // implementation merely stripping the payload. A stripping no-op
+    // would still pass the negative; it would NOT contain #0ca2af.
+    expect(res.body.toLowerCase()).toContain('#0ca2af');
   });
 
   it('does NOT render an <img class="logo"> when config.logoUrl is unset', async () => {
@@ -708,8 +713,9 @@ describe('createServer - GET / (landing page) - branding', () => {
   it('escapes the logoUrl value when injecting into the <img src> attribute', async () => {
     // Defense-in-depth: if logoUrl contained a quote-breaking payload, the
     // rendered HTML must not let an attacker break out of src="" and inject
-    // a script. Zod validates logoUrl as http(s):// at load time; this is a
-    // sentinel for direct Config construction (e.g. tests, dev tooling).
+    // a script. escapeHtml is the correct guard for HTML attribute context
+    // (unlike CSS, where structural validation is needed). Zod also
+    // validates http(s)://-with-hostname at config load.
     const app = createServer({
       config: {
         calendars: [makeCalendar({ public: true })],
@@ -719,6 +725,61 @@ describe('createServer - GET / (landing page) - branding', () => {
     });
     const res = await app.inject({ method: 'GET', url: '/' });
     expect(res.body).not.toContain('"><script>alert(1)</script>');
+    // Positive assertion: prove escaping happened (& encoding) rather than
+    // mere stripping. The malicious logoUrl is the only source of " in
+    // this test fixture (default name/slug have no quote chars), so any
+    // &quot; in the body is necessarily from the escape.
+    expect(res.body).toContain('&quot;');
+  });
+
+  it('renders the brand color in the empty-state HTML when no public calendars are configured', async () => {
+    // Empty-state goes through the same renderLandingPage call; branding
+    // must apply even when there's nothing to subscribe to.
+    const app = createServer({
+      config: { calendars: [makeCalendar({ public: false })] },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({ method: 'GET', url: '/' });
+    expect(res.body).toMatch(/no public calendars/i);
+    expect(res.body.toLowerCase()).toContain('#0ca2af');
+  });
+
+  it('sets <meta name="theme-color"> to brandColor so iOS/Android browser chrome blends with the page', async () => {
+    // Pinning the meta tag specifically — the broader brandColor test
+    // only checks the value appears somewhere in the body. Without this
+    // pin, dropping the meta tag would silently regress mobile chrome
+    // theming while the broader test still passed (color appears in
+    // <style>).
+    const app = createServer({
+      config: {
+        calendars: [makeCalendar({ public: true })],
+        brandColor: '#ff00aa',
+      },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({ method: 'GET', url: '/' });
+    expect(res.body.toLowerCase()).toContain(
+      '<meta name="theme-color" content="#ff00aa">',
+    );
+  });
+
+  it('renders both brandColor and logoUrl together when both are configured', async () => {
+    // Interaction test. Each branding field is computed independently in
+    // the implementation, but a future refactor that conditional-chains
+    // them (e.g. "skip logo unless brandColor set") would have no other
+    // regression coverage.
+    const app = createServer({
+      config: {
+        calendars: [makeCalendar({ public: true })],
+        brandColor: '#ff00aa',
+        logoUrl: 'https://example.com/logo.png',
+      },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({ method: 'GET', url: '/' });
+    expect(res.body.toLowerCase()).toContain('#ff00aa');
+    expect(res.body).toContain('https://example.com/logo.png');
+    expect(res.body).toMatch(/<img\b[^>]*class="logo"/);
   });
 });
 
@@ -781,5 +842,21 @@ describe('createServer - GET / (landing page) - subscribe options', () => {
     expect(res.body).not.toMatch(/<script\b/i);
     expect(res.body).not.toMatch(/\bonclick=/i);
     expect(res.body).not.toMatch(/\bonload=/i);
+  });
+
+  it('associates the direct-URL <input> with its visible label via aria-labelledby (a11y)', async () => {
+    // Screen-reader accessibility: the <p class="url-label"> paragraph and
+    // the <input> must share an id reference so AT users get the label
+    // read alongside the value. Per-calendar id keeps the association
+    // unique when multiple calendars render on the page.
+    const app = createServer({
+      config: {
+        calendars: [makeCalendar({ slug: 'sisterhood', public: true })],
+      },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({ method: 'GET', url: '/' });
+    expect(res.body).toMatch(/<p[^>]*class="url-label"[^>]*id="url-sisterhood"/);
+    expect(res.body).toMatch(/<input[^>]*aria-labelledby="url-sisterhood"/);
   });
 });

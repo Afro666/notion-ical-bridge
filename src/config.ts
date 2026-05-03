@@ -3,7 +3,11 @@ import { parse as parseYaml } from 'yaml';
 import { z, ZodError } from 'zod';
 
 const SLUG_REGEX = /^[a-z0-9-]+$/;
-const HEX_COLOR_REGEX = /^#[0-9a-fA-F]{6}$/;
+// Exported so the server module can re-validate brandColor at render time
+// as defense-in-depth: brandColor is interpolated into a <style> block, where
+// HTML escaping does NOT prevent CSS injection — only structural format
+// validation does. Single source of truth lives here.
+export const HEX_COLOR_REGEX = /^#[0-9a-fA-F]{6}$/;
 const HTTP_URL_REGEX = /^https?:\/\//;
 
 // Match any ${...} so we can throw a precise error on names that don't match
@@ -65,6 +69,16 @@ const RawConfigSchema = z
       .string()
       .url('logoUrl must be a valid URL')
       .refine((u) => HTTP_URL_REGEX.test(u), 'logoUrl must use http:// or https://')
+      // Bare-scheme URLs like `https://` parse cleanly through WHATWG URL but
+      // have an empty host; they would render as `<img src="https://">` and
+      // 404 on every device. Reject at parse time.
+      .refine((u) => {
+        try {
+          return new URL(u).hostname.length > 0;
+        } catch {
+          return false;
+        }
+      }, 'logoUrl must include a hostname')
       .optional(),
   })
   .superRefine((data, ctx) => {

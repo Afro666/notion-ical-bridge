@@ -6,7 +6,7 @@ import Fastify, {
   type FastifyReply,
   type FastifyRequest,
 } from 'fastify';
-import type { CalendarConfig, Config } from './config.js';
+import { HEX_COLOR_REGEX, type CalendarConfig, type Config } from './config.js';
 import {
   fetchEvents,
   type CalendarEvent,
@@ -49,10 +49,9 @@ function getRequestOrigin(request: FastifyRequest): string {
 
 const DEFAULT_BRAND_COLOR = '#0ca2af';
 
-interface LandingBranding {
-  brandColor?: string;
-  logoUrl?: string;
-}
+// Tied to Config so a new top-level branding field requires updating one
+// type, not three (interface, parameter, route-handler call site).
+type LandingBranding = Pick<Config, 'brandColor' | 'logoUrl'>;
 
 function renderLandingPage(
   publicCalendars: CalendarConfig[],
@@ -61,10 +60,19 @@ function renderLandingPage(
 ): string {
   const httpsOrigin = origin.replace(/^http:/, 'https:');
   const webcalOrigin = origin.replace(/^https?:/, 'webcal:');
-  // Defense-in-depth: Zod validates brandColor and logoUrl at config load,
-  // but escapeHtml here protects callers that bypass parseConfig (tests,
-  // dev tooling). brandColor lands in <style>; logoUrl in <img src>.
-  const brandColor = escapeHtml(branding.brandColor ?? DEFAULT_BRAND_COLOR);
+  // Defense-in-depth against callers that bypass parseConfig (tests, dev
+  // tooling). Each field needs a context-appropriate guard:
+  //   - brandColor lands in <style>. HTML escaping does NOT prevent CSS
+  //     injection (e.g. `; background: url(evil)` has zero HTML-special
+  //     characters). Re-validate against HEX_COLOR_REGEX; fall back to
+  //     the default if a bypassed value isn't a clean 6-digit hex.
+  //   - logoUrl lands in <img src=""> attribute context where escapeHtml
+  //     IS the right guard (it converts `"` to `&quot;`, blocking
+  //     attribute-breakout). Zod also validates scheme + hostname.
+  const rawBrandColor = branding.brandColor ?? DEFAULT_BRAND_COLOR;
+  const brandColor = HEX_COLOR_REGEX.test(rawBrandColor)
+    ? rawBrandColor
+    : DEFAULT_BRAND_COLOR;
   const logoTag = branding.logoUrl
     ? `<img src="${escapeHtml(branding.logoUrl)}" alt="" class="logo">`
     : '';
@@ -83,6 +91,10 @@ function renderLandingPage(
       // calendar.google.com to the same page. Saves users from "copy URL,
       // open settings, paste" — a real friction point on phones.
       const gcalUrl = `https://calendar.google.com/calendar/r/settings/addbyurl?cid=${encodeURIComponent(httpsUrl)}`;
+      // Per-calendar id keeps the label-input association unique when
+      // multiple calendars render on the page. slug is escapeHtml'd above
+      // and Zod-restricted to /^[a-z0-9-]+$/, so it's id-safe.
+      const urlLabelId = `url-${slug}`;
       return `
     <article class="cal">
       <h2>${name}</h2>
@@ -91,8 +103,8 @@ function renderLandingPage(
         <a class="btn btn-primary" href="${webcalUrl}">Subscribe (iPhone, Mac, Outlook)</a>
         <a class="btn btn-secondary" href="${gcalUrl}">Add to Google Calendar</a>
       </div>
-      <p class="url-label">Or copy the direct URL (Outlook web, Thunderbird, Fantastical):</p>
-      <input class="url-input" type="text" readonly value="${httpsUrl}" aria-label="Direct calendar URL for ${name}">
+      <p class="url-label" id="${urlLabelId}">Or copy the direct URL (Outlook web, Thunderbird, Fantastical):</p>
+      <input class="url-input" type="text" readonly value="${httpsUrl}" aria-labelledby="${urlLabelId}">
     </article>`;
     })
     .join('');

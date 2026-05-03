@@ -542,5 +542,31 @@ calendars:
       const config = parseConfig(yaml);
       expect(config.logoUrl).toBeUndefined();
     });
+
+    it('rejects a bare-scheme logoUrl with no hostname (e.g. "https://")', () => {
+      // WHATWG URL parser accepts `https://` (empty host) so Zod's plain
+      // .url() check passes. The hostname-presence refine is the gate.
+      const yaml = `
+logoUrl: 'https://'
+calendars:
+  - slug: events
+    databaseId: db_abc
+    timezone: UTC
+    dateProperty: Date
+    titleProperty: Name
+`;
+      expect(() => parseConfig(yaml)).toThrow(/logoUrl/i);
+    });
+  });
+
+  describe('top-level required fields', () => {
+    it('rejects YAML that omits the calendars key entirely', () => {
+      // Distinct from the empty-array case (`calendars: []`). `.min(1)` on
+      // an absent key triggers a "Required" error on a different path.
+      const yaml = `
+brandColor: '#ff0000'
+`;
+      expect(() => parseConfig(yaml)).toThrow(/calendars/i);
+    });
   });
 });
