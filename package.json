@@ -1,6 +1,6 @@
 {
   "name": "notion-ical-bridge",
-  "version": "0.1.0",
+  "version": "1.1.0",
   "private": false,
   "description": "Self-hosted HTTP server that exposes Notion databases as iCal feeds. Subscribe from any calendar app.",
   "keywords": [

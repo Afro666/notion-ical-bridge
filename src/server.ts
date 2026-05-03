@@ -47,12 +47,27 @@ function getRequestOrigin(request: FastifyRequest): string {
   return `${proto}://${host}`;
 }
 
+const DEFAULT_BRAND_COLOR = '#0ca2af';
+
+interface LandingBranding {
+  brandColor?: string;
+  logoUrl?: string;
+}
+
 function renderLandingPage(
   publicCalendars: CalendarConfig[],
   origin: string,
+  branding: LandingBranding = {},
 ): string {
   const httpsOrigin = origin.replace(/^http:/, 'https:');
   const webcalOrigin = origin.replace(/^https?:/, 'webcal:');
+  // Defense-in-depth: Zod validates brandColor and logoUrl at config load,
+  // but escapeHtml here protects callers that bypass parseConfig (tests,
+  // dev tooling). brandColor lands in <style>; logoUrl in <img src>.
+  const brandColor = escapeHtml(branding.brandColor ?? DEFAULT_BRAND_COLOR);
+  const logoTag = branding.logoUrl
+    ? `<img src="${escapeHtml(branding.logoUrl)}" alt="" class="logo">`
+    : '';
 
   const calendarBlocks = publicCalendars
     .map((cal) => {
@@ -63,13 +78,22 @@ function renderLandingPage(
         : '';
       const httpsUrl = `${httpsOrigin}/${slug}.ics`;
       const webcalUrl = `${webcalOrigin}/${slug}.ics`;
+      // Google Calendar's "add by URL" deep link. On Android Chrome it opens
+      // the Google Calendar add-by-URL flow directly; on desktop it opens
+      // calendar.google.com to the same page. Saves users from "copy URL,
+      // open settings, paste" — a real friction point on phones.
+      const gcalUrl = `https://calendar.google.com/calendar/r/settings/addbyurl?cid=${encodeURIComponent(httpsUrl)}`;
       return `
-    <div class="cal">
+    <article class="cal">
       <h2>${name}</h2>
       ${description}
-      <p><strong>Subscribe:</strong> <a href="${webcalUrl}">${webcalUrl}</a></p>
-      <p><strong>Direct URL:</strong> <code>${httpsUrl}</code></p>
-    </div>`;
+      <div class="actions">
+        <a class="btn btn-primary" href="${webcalUrl}">Subscribe (iPhone, Mac, Outlook)</a>
+        <a class="btn btn-secondary" href="${gcalUrl}">Add to Google Calendar</a>
+      </div>
+      <p class="url-label">Or copy the direct URL (Outlook web, Thunderbird, Fantastical):</p>
+      <input class="url-input" type="text" readonly value="${httpsUrl}" aria-label="Direct calendar URL for ${name}">
+    </article>`;
     })
     .join('');
 
@@ -84,25 +108,120 @@ function renderLandingPage(
   <meta charset="UTF-8">
   <title>notion-ical-bridge</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="${brandColor}">
   <style>
-    body { font-family: system-ui, -apple-system, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; color: #222; }
-    h1 { margin-bottom: 0.25rem; }
-    .sub { color: #666; margin-top: 0; }
-    .cal { border: 1px solid #ddd; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
-    .cal h2 { margin-top: 0; }
-    .desc { color: #555; }
-    code { background: #f4f4f4; padding: 0.1rem 0.4rem; border-radius: 3px; font-size: 0.9em; word-break: break-all; }
-    a { color: #0366d6; text-decoration: none; word-break: break-all; }
-    a:hover { text-decoration: underline; }
-    .empty { color: #888; font-style: italic; }
-    footer { margin-top: 3rem; color: #888; font-size: 0.85em; }
+    :root { --brand: ${brandColor}; --accent: #f2a829; }
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      background: var(--brand);
+      color: #fff;
+      font-family: 'Montserrat', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      min-height: 100vh;
+      padding: 1.5rem 1rem 3rem;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+    .wrap { max-width: 760px; margin: 0 auto; }
+    .header { display: flex; align-items: center; gap: 1rem; margin-bottom: 0.25rem; flex-wrap: wrap; }
+    .logo { height: 2.75rem; width: auto; flex-shrink: 0; }
+    h1 {
+      font-size: clamp(1.75rem, 6vw, 2.5rem);
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin: 0;
+      color: #fff;
+    }
+    .sub {
+      font-size: 1rem;
+      color: rgba(255,255,255,0.85);
+      margin: 0.25rem 0 1.75rem;
+    }
+    .cal {
+      background: #fff;
+      color: #1f1f22;
+      border-radius: 14px;
+      padding: 1.25rem 1.25rem 1rem;
+      margin-bottom: 1.25rem;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.18);
+    }
+    .cal h2 {
+      font-size: 1.25rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      margin: 0 0 0.5rem;
+      color: #353740;
+    }
+    .desc { color: #565552; margin: 0 0 1rem; }
+    .actions {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      margin: 0 0 1rem;
+    }
+    .btn {
+      display: block;
+      text-align: center;
+      padding: 0.85rem 1rem;
+      min-height: 44px;
+      border-radius: 10px;
+      text-decoration: none;
+      font-weight: 700;
+      font-size: 0.95rem;
+      letter-spacing: 0.02em;
+      word-break: break-word;
+    }
+    .btn-primary { background: var(--brand); color: #fff; }
+    .btn-secondary { background: var(--accent); color: #1f1f22; }
+    .btn:hover { filter: brightness(1.08); }
+    .btn:active { filter: brightness(0.94); }
+    .url-label { font-size: 0.85rem; color: #565552; margin: 0 0 0.4rem; }
+    .url-input {
+      width: 100%;
+      padding: 0.75rem 0.85rem;
+      min-height: 44px;
+      border: 1px solid #cfd3d3;
+      border-radius: 8px;
+      background: #f7f7f7;
+      color: #1f1f22;
+      font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+      font-size: 0.9rem;
+    }
+    .empty {
+      background: rgba(255,255,255,0.12);
+      border-radius: 14px;
+      padding: 2rem 1.25rem;
+      color: rgba(255,255,255,0.92);
+      text-align: center;
+      font-style: italic;
+    }
+    footer {
+      color: rgba(255,255,255,0.75);
+      font-size: 0.85rem;
+      margin-top: 2rem;
+      text-align: center;
+    }
+    footer a { color: rgba(255,255,255,0.95); text-decoration: underline; }
+    /* Tablet+: lay subscribe buttons side-by-side, give more page padding. */
+    @media (min-width: 600px) {
+      body { padding: 3rem 1.5rem 4rem; }
+      .actions { flex-direction: row; flex-wrap: wrap; }
+      .btn { flex: 1 1 200px; }
+    }
   </style>
 </head>
 <body>
-  <h1>notion-ical-bridge</h1>
-  <p class="sub">Subscribe to Notion databases as calendar feeds.</p>
+  <div class="wrap">
+    <header class="header">
+      ${logoTag}
+      <h1>notion-ical-bridge</h1>
+    </header>
+    <p class="sub">Subscribe to Notion databases as calendar feeds.</p>
 ${body}
-  <footer>Self-hosted · <a href="https://github.com/Afro666/notion-ical-bridge">source</a></footer>
+    <footer>Self-hosted · <a href="https://github.com/Afro666/notion-ical-bridge">source</a></footer>
+  </div>
 </body>
 </html>
 `;
@@ -191,7 +310,10 @@ export function createServer(deps: ServerDeps): FastifyInstance {
   app.get('/', async (req: FastifyRequest, reply: FastifyReply) => {
     const publicCalendars = deps.config.calendars.filter((c) => c.public);
     reply.type('text/html; charset=utf-8');
-    return renderLandingPage(publicCalendars, getRequestOrigin(req));
+    return renderLandingPage(publicCalendars, getRequestOrigin(req), {
+      brandColor: deps.config.brandColor,
+      logoUrl: deps.config.logoUrl,
+    });
   });
 
   app.get(

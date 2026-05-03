@@ -10,6 +10,11 @@
 # on the first subscriber request to that calendar.
 # See the README for a property-by-property walk-through.
 
+# Optional landing-page branding. Both fields are top-level and optional.
+# When unset, the page uses a teal palette and renders no logo.
+# brandColor: '#0ca2af'                                 # any 6-digit hex
+# logoUrl: https://your-cdn.example.com/logo.png       # any http(s):// URL
+
 defaults:
   # Fallback values applied to every calendar that doesn't override them.
   # Calendar-level fields always win.

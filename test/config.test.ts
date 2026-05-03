@@ -381,4 +381,166 @@ calendars:
       }
     });
   });
+
+  describe('top-level branding fields', () => {
+    it('accepts a 6-digit lowercase hex brandColor', () => {
+      const yaml = `
+brandColor: '#0ca2af'
+calendars:
+  - slug: events
+    databaseId: db_abc
+    timezone: UTC
+    dateProperty: Date
+    titleProperty: Name
+`;
+      const config = parseConfig(yaml);
+      expect(config.brandColor).toBe('#0ca2af');
+    });
+
+    it('accepts a 6-digit uppercase hex brandColor', () => {
+      const yaml = `
+brandColor: '#FF00AA'
+calendars:
+  - slug: events
+    databaseId: db_abc
+    timezone: UTC
+    dateProperty: Date
+    titleProperty: Name
+`;
+      const config = parseConfig(yaml);
+      expect(config.brandColor).toBe('#FF00AA');
+    });
+
+    it('rejects a 3-digit shorthand hex brandColor', () => {
+      const yaml = `
+brandColor: '#abc'
+calendars:
+  - slug: events
+    databaseId: db_abc
+    timezone: UTC
+    dateProperty: Date
+    titleProperty: Name
+`;
+      expect(() => parseConfig(yaml)).toThrow(/brandColor/i);
+    });
+
+    it('rejects a brandColor with no leading #', () => {
+      const yaml = `
+brandColor: ff00aa
+calendars:
+  - slug: events
+    databaseId: db_abc
+    timezone: UTC
+    dateProperty: Date
+    titleProperty: Name
+`;
+      expect(() => parseConfig(yaml)).toThrow(/brandColor/i);
+    });
+
+    it('rejects a brandColor that is a CSS keyword (e.g. "teal")', () => {
+      const yaml = `
+brandColor: teal
+calendars:
+  - slug: events
+    databaseId: db_abc
+    timezone: UTC
+    dateProperty: Date
+    titleProperty: Name
+`;
+      expect(() => parseConfig(yaml)).toThrow(/brandColor/i);
+    });
+
+    it('treats brandColor as optional (undefined when omitted)', () => {
+      const yaml = `
+calendars:
+  - slug: events
+    databaseId: db_abc
+    timezone: UTC
+    dateProperty: Date
+    titleProperty: Name
+`;
+      const config = parseConfig(yaml);
+      expect(config.brandColor).toBeUndefined();
+    });
+
+    it('accepts a valid https logoUrl', () => {
+      const yaml = `
+logoUrl: https://cdn.example.com/logo.svg
+calendars:
+  - slug: events
+    databaseId: db_abc
+    timezone: UTC
+    dateProperty: Date
+    titleProperty: Name
+`;
+      const config = parseConfig(yaml);
+      expect(config.logoUrl).toBe('https://cdn.example.com/logo.svg');
+    });
+
+    it('accepts a valid http logoUrl (for LAN/internal deployments)', () => {
+      const yaml = `
+logoUrl: http://internal.lan/logo.png
+calendars:
+  - slug: events
+    databaseId: db_abc
+    timezone: UTC
+    dateProperty: Date
+    titleProperty: Name
+`;
+      const config = parseConfig(yaml);
+      expect(config.logoUrl).toBe('http://internal.lan/logo.png');
+    });
+
+    it('rejects a logoUrl with a non-http(s) scheme', () => {
+      const yaml = `
+logoUrl: ftp://example.com/logo.png
+calendars:
+  - slug: events
+    databaseId: db_abc
+    timezone: UTC
+    dateProperty: Date
+    titleProperty: Name
+`;
+      expect(() => parseConfig(yaml)).toThrow(/logoUrl/i);
+    });
+
+    it('rejects an empty-string logoUrl', () => {
+      const yaml = `
+logoUrl: ''
+calendars:
+  - slug: events
+    databaseId: db_abc
+    timezone: UTC
+    dateProperty: Date
+    titleProperty: Name
+`;
+      expect(() => parseConfig(yaml)).toThrow(/logoUrl/i);
+    });
+
+    it('rejects a logoUrl that is not a URL at all', () => {
+      const yaml = `
+logoUrl: not-a-url
+calendars:
+  - slug: events
+    databaseId: db_abc
+    timezone: UTC
+    dateProperty: Date
+    titleProperty: Name
+`;
+      expect(() => parseConfig(yaml)).toThrow(/logoUrl/i);
+    });
+
+    it('treats logoUrl as optional (undefined when omitted)', () => {
+      const yaml = `
+calendars:
+  - slug: events
+    databaseId: db_abc
+    timezone: UTC
+    dateProperty: Date
+    titleProperty: Name
+`;
+      const config = parseConfig(yaml);
+      expect(config.logoUrl).toBeUndefined();
+    });
+  });
 });

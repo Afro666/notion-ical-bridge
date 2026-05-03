@@ -598,4 +598,188 @@ describe('createServer - GET / (landing page)', () => {
     expect(res.body).not.toContain('<script>alert(1)</script>');
     expect(res.body).toContain('&lt;script&gt;');
   });
+
+  it('renders the page title "notion-ical-bridge"', async () => {
+    const app = createServer({
+      config: { calendars: [makeCalendar({ public: true })] },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({ method: 'GET', url: '/' });
+    expect(res.body).toContain('<title>notion-ical-bridge</title>');
+  });
+
+  it('escapes HTML special characters in calendar descriptions', async () => {
+    const app = createServer({
+      config: {
+        calendars: [
+          makeCalendar({
+            slug: 'safe',
+            description: '<img src=x onerror=alert(1)>',
+            public: true,
+          }),
+        ],
+      },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({ method: 'GET', url: '/' });
+    expect(res.body).not.toContain('<img src=x onerror=alert(1)>');
+    expect(res.body).toContain('&lt;img');
+  });
+
+  it('renders each public calendar slug inside an <a href=".../slug.ics"> link', async () => {
+    const app = createServer({
+      config: {
+        calendars: [
+          makeCalendar({ slug: 'sisterhood', name: 'Sis', public: true }),
+        ],
+      },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({
+      method: 'GET',
+      url: '/',
+      headers: { host: 'cal.example.com', 'x-forwarded-proto': 'https' },
+    });
+    expect(res.body).toMatch(/href="[^"]*sisterhood\.ics"/);
+  });
+});
+
+describe('createServer - GET / (landing page) - branding', () => {
+  it('applies the default brand color (#0ca2af) when config.brandColor is unset', async () => {
+    const app = createServer({
+      config: { calendars: [makeCalendar({ public: true })] },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({ method: 'GET', url: '/' });
+    expect(res.body.toLowerCase()).toContain('#0ca2af');
+  });
+
+  it('applies a custom brandColor from config and omits the default', async () => {
+    const app = createServer({
+      config: {
+        calendars: [makeCalendar({ public: true })],
+        brandColor: '#ff00aa',
+      },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({ method: 'GET', url: '/' });
+    expect(res.body.toLowerCase()).toContain('#ff00aa');
+    expect(res.body.toLowerCase()).not.toContain('#0ca2af');
+  });
+
+  it('escapes the brandColor value defensively before injecting into <style>', async () => {
+    // Defense-in-depth. Zod validates brandColor at config-load time, but
+    // tests construct Config directly. If brandColor ever contained a
+    // </style><script> sequence, the rendered body must not contain an
+    // unescaped <script> tag. Sentinel against any future Zod bypass.
+    const app = createServer({
+      config: {
+        calendars: [makeCalendar({ public: true })],
+        brandColor: '</style><script>alert(1)</script>',
+      },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({ method: 'GET', url: '/' });
+    expect(res.body).not.toContain('<script>alert(1)</script>');
+  });
+
+  it('does NOT render an <img class="logo"> when config.logoUrl is unset', async () => {
+    const app = createServer({
+      config: { calendars: [makeCalendar({ public: true })] },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({ method: 'GET', url: '/' });
+    expect(res.body).not.toMatch(/<img\b[^>]*class="logo"/);
+  });
+
+  it('renders an <img class="logo"> with the configured logoUrl as src', async () => {
+    const app = createServer({
+      config: {
+        calendars: [makeCalendar({ public: true })],
+        logoUrl: 'https://example.com/logo.png',
+      },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({ method: 'GET', url: '/' });
+    expect(res.body).toMatch(/<img\b[^>]*class="logo"/);
+    expect(res.body).toContain('https://example.com/logo.png');
+  });
+
+  it('escapes the logoUrl value when injecting into the <img src> attribute', async () => {
+    // Defense-in-depth: if logoUrl contained a quote-breaking payload, the
+    // rendered HTML must not let an attacker break out of src="" and inject
+    // a script. Zod validates logoUrl as http(s):// at load time; this is a
+    // sentinel for direct Config construction (e.g. tests, dev tooling).
+    const app = createServer({
+      config: {
+        calendars: [makeCalendar({ public: true })],
+        logoUrl: 'https://x.com/"><script>alert(1)</script>',
+      },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({ method: 'GET', url: '/' });
+    expect(res.body).not.toContain('"><script>alert(1)</script>');
+  });
+});
+
+describe('createServer - GET / (landing page) - subscribe options', () => {
+  it('renders a webcal:// link for each public calendar (iPhone / Mac / Outlook one-tap)', async () => {
+    const app = createServer({
+      config: { calendars: [makeCalendar({ slug: 'sisterhood', public: true })] },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({
+      method: 'GET',
+      url: '/',
+      headers: { host: 'cal.example.com', 'x-forwarded-proto': 'https' },
+    });
+    expect(res.body).toMatch(
+      /href="webcal:\/\/cal\.example\.com\/sisterhood\.ics"/,
+    );
+  });
+
+  it('renders an "Add to Google Calendar" deep link with the URL-encoded https feed as cid', async () => {
+    const app = createServer({
+      config: { calendars: [makeCalendar({ slug: 'sisterhood', public: true })] },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({
+      method: 'GET',
+      url: '/',
+      headers: { host: 'cal.example.com', 'x-forwarded-proto': 'https' },
+    });
+    const expectedCid = encodeURIComponent('https://cal.example.com/sisterhood.ics');
+    expect(res.body).toContain(
+      `https://calendar.google.com/calendar/r/settings/addbyurl?cid=${expectedCid}`,
+    );
+  });
+
+  it('renders the direct https feed inside an <input readonly> for tap-to-select on mobile', async () => {
+    // <input readonly> is the most reliable phone-friendly copy affordance:
+    // tapping the field auto-selects on iOS and Android with no JS needed.
+    // A plain <code> block does not give the user a one-tap select.
+    const app = createServer({
+      config: { calendars: [makeCalendar({ slug: 'sisterhood', public: true })] },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({
+      method: 'GET',
+      url: '/',
+      headers: { host: 'cal.example.com', 'x-forwarded-proto': 'https' },
+    });
+    expect(res.body).toMatch(
+      /<input[^>]*readonly[^>]*value="https:\/\/cal\.example\.com\/sisterhood\.ics"/,
+    );
+  });
+
+  it('serves the page without any JavaScript dependency (no <script>, no inline handlers)', async () => {
+    const app = createServer({
+      config: { calendars: [makeCalendar({ slug: 'sisterhood', public: true })] },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({ method: 'GET', url: '/' });
+    expect(res.body).not.toMatch(/<script\b/i);
+    expect(res.body).not.toMatch(/\bonclick=/i);
+    expect(res.body).not.toMatch(/\bonload=/i);
+  });
 });
