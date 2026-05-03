@@ -6,7 +6,8 @@ import Fastify, {
   type FastifyReply,
   type FastifyRequest,
 } from 'fastify';
-import { HEX_COLOR_REGEX, type CalendarConfig, type Config } from './config.js';
+import { HEX_COLOR_REGEX } from './config.js';
+import type { CalendarConfig, Config } from './config.js';
 import {
   fetchEvents,
   type CalendarEvent,
@@ -49,8 +50,10 @@ function getRequestOrigin(request: FastifyRequest): string {
 
 const DEFAULT_BRAND_COLOR = '#0ca2af';
 
-// Tied to Config so a new top-level branding field requires updating one
-// type, not three (interface, parameter, route-handler call site).
+// Tied to Config so the field set lives in one place — no duplicate
+// interface that can drift. Adding a new branding field still requires
+// updating this Pick key list and the route-handler spread; the alias
+// just removes one of the three touch points the prior interface had.
 type LandingBranding = Pick<Config, 'brandColor' | 'logoUrl'>;
 
 function renderLandingPage(
@@ -92,8 +95,10 @@ function renderLandingPage(
       // open settings, paste" — a real friction point on phones.
       const gcalUrl = `https://calendar.google.com/calendar/r/settings/addbyurl?cid=${encodeURIComponent(httpsUrl)}`;
       // Per-calendar id keeps the label-input association unique when
-      // multiple calendars render on the page. slug is escapeHtml'd above
-      // and Zod-restricted to /^[a-z0-9-]+$/, so it's id-safe.
+      // multiple calendars render on the page. Zod's SLUG_REGEX
+      // (/^[a-z0-9-]+$/) is what guarantees id-safety here; the
+      // escapeHtml call upstream is a no-op for any valid slug, since
+      // the regex already excludes &<>"'.
       const urlLabelId = `url-${slug}`;
       return `
     <article class="cal">
@@ -322,9 +327,21 @@ export function createServer(deps: ServerDeps): FastifyInstance {
   app.get('/', async (req: FastifyRequest, reply: FastifyReply) => {
     const publicCalendars = deps.config.calendars.filter((c) => c.public);
     reply.type('text/html; charset=utf-8');
+    const { brandColor, logoUrl } = deps.config;
+    // Observability for the render-time fallback. parseConfig validates
+    // brandColor at config load, so this can only fire if a non-Zod
+    // caller produced the Config (tests, dev tooling) or a post-load
+    // mutation slipped a bad value in. Without this warn, the page
+    // silently renders with default branding and the bug is invisible.
+    if (brandColor !== undefined && !HEX_COLOR_REGEX.test(brandColor)) {
+      req.log.warn(
+        { brandColor },
+        'config.brandColor failed HEX_COLOR_REGEX at render time; falling back to default',
+      );
+    }
     return renderLandingPage(publicCalendars, getRequestOrigin(req), {
-      brandColor: deps.config.brandColor,
-      logoUrl: deps.config.logoUrl,
+      brandColor,
+      logoUrl,
     });
   });
 

@@ -69,9 +69,11 @@ const RawConfigSchema = z
       .string()
       .url('logoUrl must be a valid URL')
       .refine((u) => HTTP_URL_REGEX.test(u), 'logoUrl must use http:// or https://')
-      // Bare-scheme URLs like `https://` parse cleanly through WHATWG URL but
-      // have an empty host; they would render as `<img src="https://">` and
-      // 404 on every device. Reject at parse time.
+      // Reject bare-scheme URLs like `https://` (no host). These would
+      // render as `<img src="https://">` and 404 on every device.
+      // `new URL('https://')` throws TypeError in Node, so the catch is
+      // the actual gate; the truthy hostname-length check covers any
+      // edge case where the constructor accepts an empty-host URL.
       .refine((u) => {
         try {
           return new URL(u).hostname.length > 0;
