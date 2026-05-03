@@ -598,4 +598,265 @@ describe('createServer - GET / (landing page)', () => {
     expect(res.body).not.toContain('<script>alert(1)</script>');
     expect(res.body).toContain('&lt;script&gt;');
   });
+
+  it('renders the page title "notion-ical-bridge"', async () => {
+    const app = createServer({
+      config: { calendars: [makeCalendar({ public: true })] },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({ method: 'GET', url: '/' });
+    expect(res.body).toContain('<title>notion-ical-bridge</title>');
+  });
+
+  it('escapes HTML special characters in calendar descriptions', async () => {
+    const app = createServer({
+      config: {
+        calendars: [
+          makeCalendar({
+            slug: 'safe',
+            description: '<img src=x onerror=alert(1)>',
+            public: true,
+          }),
+        ],
+      },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({ method: 'GET', url: '/' });
+    expect(res.body).not.toContain('<img src=x onerror=alert(1)>');
+    expect(res.body).toContain('&lt;img');
+  });
+
+  it('renders each public calendar slug inside an <a href=".../slug.ics"> link', async () => {
+    const app = createServer({
+      config: {
+        calendars: [
+          makeCalendar({ slug: 'sisterhood', name: 'Sis', public: true }),
+        ],
+      },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({
+      method: 'GET',
+      url: '/',
+      headers: { host: 'cal.example.com', 'x-forwarded-proto': 'https' },
+    });
+    expect(res.body).toMatch(/href="[^"]*sisterhood\.ics"/);
+  });
+});
+
+describe('createServer - GET / (landing page) - branding', () => {
+  it('applies the default brand color (#0ca2af) when config.brandColor is unset', async () => {
+    const app = createServer({
+      config: { calendars: [makeCalendar({ public: true })] },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({ method: 'GET', url: '/' });
+    expect(res.body.toLowerCase()).toContain('#0ca2af');
+  });
+
+  it('applies a custom brandColor from config and omits the default', async () => {
+    const app = createServer({
+      config: {
+        calendars: [makeCalendar({ public: true })],
+        brandColor: '#ff00aa',
+      },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({ method: 'GET', url: '/' });
+    expect(res.body.toLowerCase()).toContain('#ff00aa');
+    expect(res.body.toLowerCase()).not.toContain('#0ca2af');
+  });
+
+  it('falls back to the default brand color when a malformed value bypasses Zod (CSS-context defense)', async () => {
+    // Defense-in-depth. Zod validates brandColor as 6-digit hex at config
+    // load, but tests / dev tooling can construct Config directly.
+    // brandColor lands in <style> — HTML escaping does NOT prevent CSS
+    // injection in that context. A render-time HEX_COLOR_REGEX re-check
+    // catches bypassed values and falls back to the default.
+    const app = createServer({
+      config: {
+        calendars: [makeCalendar({ public: true })],
+        brandColor: '</style><script>alert(1)</script>',
+      },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({ method: 'GET', url: '/' });
+    expect(res.body).not.toContain('<script>alert(1)</script>');
+    // Positive assertion: prove the fallback ran rather than the
+    // implementation merely stripping the payload. A stripping no-op
+    // would still pass the negative; it would NOT contain #0ca2af.
+    expect(res.body.toLowerCase()).toContain('#0ca2af');
+  });
+
+  it('does NOT render an <img class="logo"> when config.logoUrl is unset', async () => {
+    const app = createServer({
+      config: { calendars: [makeCalendar({ public: true })] },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({ method: 'GET', url: '/' });
+    expect(res.body).not.toMatch(/<img\b[^>]*class="logo"/);
+  });
+
+  it('renders an <img class="logo"> with the configured logoUrl as src', async () => {
+    const app = createServer({
+      config: {
+        calendars: [makeCalendar({ public: true })],
+        logoUrl: 'https://example.com/logo.png',
+      },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({ method: 'GET', url: '/' });
+    expect(res.body).toMatch(/<img\b[^>]*class="logo"/);
+    expect(res.body).toContain('https://example.com/logo.png');
+  });
+
+  it('escapes the logoUrl value when injecting into the <img src> attribute', async () => {
+    // Defense-in-depth: if logoUrl contained a quote-breaking payload, the
+    // rendered HTML must not let an attacker break out of src="" and inject
+    // a script. escapeHtml is the correct guard for HTML attribute context
+    // (unlike CSS, where structural validation is needed). Zod also
+    // validates http(s)://-with-hostname at config load.
+    const app = createServer({
+      config: {
+        calendars: [makeCalendar({ public: true })],
+        logoUrl: 'https://x.com/"><script>alert(1)</script>',
+      },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({ method: 'GET', url: '/' });
+    expect(res.body).not.toContain('"><script>alert(1)</script>');
+    // Positive assertion: prove escaping happened (& encoding) rather than
+    // mere stripping. The malicious logoUrl is the only source of " in
+    // this test fixture (default name/slug have no quote chars), so any
+    // &quot; in the body is necessarily from the escape.
+    expect(res.body).toContain('&quot;');
+  });
+
+  it('renders the brand color in the empty-state HTML when no public calendars are configured', async () => {
+    // Empty-state goes through the same renderLandingPage call; branding
+    // must apply even when there's nothing to subscribe to.
+    const app = createServer({
+      config: { calendars: [makeCalendar({ public: false })] },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({ method: 'GET', url: '/' });
+    expect(res.body).toMatch(/no public calendars/i);
+    expect(res.body.toLowerCase()).toContain('#0ca2af');
+  });
+
+  it('sets <meta name="theme-color"> to brandColor so iOS/Android browser chrome blends with the page', async () => {
+    // Pinning the meta tag specifically — the broader brandColor test
+    // only checks the value appears somewhere in the body. Without this
+    // pin, dropping the meta tag would silently regress mobile chrome
+    // theming while the broader test still passed (color appears in
+    // <style>).
+    const app = createServer({
+      config: {
+        calendars: [makeCalendar({ public: true })],
+        brandColor: '#ff00aa',
+      },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({ method: 'GET', url: '/' });
+    expect(res.body.toLowerCase()).toContain(
+      '<meta name="theme-color" content="#ff00aa">',
+    );
+  });
+
+  it('renders both brandColor and logoUrl together when both are configured', async () => {
+    // Interaction test. Each branding field is computed independently in
+    // the implementation, but a future refactor that conditional-chains
+    // them (e.g. "skip logo unless brandColor set") would have no other
+    // regression coverage.
+    const app = createServer({
+      config: {
+        calendars: [makeCalendar({ public: true })],
+        brandColor: '#ff00aa',
+        logoUrl: 'https://example.com/logo.png',
+      },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({ method: 'GET', url: '/' });
+    expect(res.body.toLowerCase()).toContain('#ff00aa');
+    expect(res.body).toContain('https://example.com/logo.png');
+    expect(res.body).toMatch(/<img\b[^>]*class="logo"/);
+  });
+});
+
+describe('createServer - GET / (landing page) - subscribe options', () => {
+  it('renders a webcal:// link for each public calendar (iPhone / Mac / Outlook one-tap)', async () => {
+    const app = createServer({
+      config: { calendars: [makeCalendar({ slug: 'sisterhood', public: true })] },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({
+      method: 'GET',
+      url: '/',
+      headers: { host: 'cal.example.com', 'x-forwarded-proto': 'https' },
+    });
+    expect(res.body).toMatch(
+      /href="webcal:\/\/cal\.example\.com\/sisterhood\.ics"/,
+    );
+  });
+
+  it('renders an "Add to Google Calendar" deep link with the URL-encoded https feed as cid', async () => {
+    const app = createServer({
+      config: { calendars: [makeCalendar({ slug: 'sisterhood', public: true })] },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({
+      method: 'GET',
+      url: '/',
+      headers: { host: 'cal.example.com', 'x-forwarded-proto': 'https' },
+    });
+    const expectedCid = encodeURIComponent('https://cal.example.com/sisterhood.ics');
+    expect(res.body).toContain(
+      `https://calendar.google.com/calendar/r/settings/addbyurl?cid=${expectedCid}`,
+    );
+  });
+
+  it('renders the direct https feed inside an <input readonly> for tap-to-select on mobile', async () => {
+    // <input readonly> is the most reliable phone-friendly copy affordance:
+    // tapping the field auto-selects on iOS and Android with no JS needed.
+    // A plain <code> block does not give the user a one-tap select.
+    const app = createServer({
+      config: { calendars: [makeCalendar({ slug: 'sisterhood', public: true })] },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({
+      method: 'GET',
+      url: '/',
+      headers: { host: 'cal.example.com', 'x-forwarded-proto': 'https' },
+    });
+    expect(res.body).toMatch(
+      /<input[^>]*readonly[^>]*value="https:\/\/cal\.example\.com\/sisterhood\.ics"/,
+    );
+  });
+
+  it('serves the page without any JavaScript dependency (no <script>, no inline handlers)', async () => {
+    const app = createServer({
+      config: { calendars: [makeCalendar({ slug: 'sisterhood', public: true })] },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({ method: 'GET', url: '/' });
+    expect(res.body).not.toMatch(/<script\b/i);
+    expect(res.body).not.toMatch(/\bonclick=/i);
+    expect(res.body).not.toMatch(/\bonload=/i);
+  });
+
+  it('associates the direct-URL <input> with its visible label via aria-labelledby (a11y)', async () => {
+    // Screen-reader accessibility: the <p class="url-label"> paragraph and
+    // the <input> must share an id reference so AT users get the label
+    // read alongside the value. Per-calendar id keeps the association
+    // unique when multiple calendars render on the page.
+    const app = createServer({
+      config: {
+        calendars: [makeCalendar({ slug: 'sisterhood', public: true })],
+      },
+      resolvedCalendars: new Map(),
+    });
+    const res = await app.inject({ method: 'GET', url: '/' });
+    expect(res.body).toMatch(/<p[^>]*class="url-label"[^>]*id="url-sisterhood"/);
+    expect(res.body).toMatch(/<input[^>]*aria-labelledby="url-sisterhood"/);
+  });
 });

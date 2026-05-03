@@ -3,6 +3,12 @@ import { parse as parseYaml } from 'yaml';
 import { z, ZodError } from 'zod';
 
 const SLUG_REGEX = /^[a-z0-9-]+$/;
+// Exported so the server module can re-validate brandColor at render time
+// as defense-in-depth: brandColor is interpolated into a <style> block, where
+// HTML escaping does NOT prevent CSS injection — only structural format
+// validation does. Single source of truth lives here.
+export const HEX_COLOR_REGEX = /^#[0-9a-fA-F]{6}$/;
+const HTTP_URL_REGEX = /^https?:\/\//;
 
 // Match any ${...} so we can throw a precise error on names that don't match
 // our supported shape (uppercase snake case). Letting unknown patterns pass
@@ -55,6 +61,27 @@ const RawConfigSchema = z
   .object({
     defaults: RawDefaultsSchema.optional(),
     calendars: z.array(RawCalendarSchema).min(1, 'at least one calendar is required'),
+    brandColor: z
+      .string()
+      .regex(HEX_COLOR_REGEX, 'brandColor must be a 6-digit hex color like #0ca2af')
+      .optional(),
+    logoUrl: z
+      .string()
+      .url('logoUrl must be a valid URL')
+      .refine((u) => HTTP_URL_REGEX.test(u), 'logoUrl must use http:// or https://')
+      // Reject bare-scheme URLs like `https://` (no host). These would
+      // render as `<img src="https://">` and 404 on every device.
+      // `new URL('https://')` throws TypeError in Node, so the catch is
+      // the actual gate; the truthy hostname-length check covers any
+      // edge case where the constructor accepts an empty-host URL.
+      .refine((u) => {
+        try {
+          return new URL(u).hostname.length > 0;
+        } catch {
+          return false;
+        }
+      }, 'logoUrl must include a hostname')
+      .optional(),
   })
   .superRefine((data, ctx) => {
     const seen = new Set<string>();
@@ -93,6 +120,8 @@ export interface CalendarConfig {
 
 export interface Config {
   calendars: CalendarConfig[];
+  brandColor?: string;
+  logoUrl?: string;
 }
 
 function interpolateEnv(value: string): string {
@@ -171,7 +200,10 @@ export function parseConfig(yamlString: string): Config {
 
   const defaults = validated.defaults ?? {};
   const calendars = validated.calendars.map((c) => resolveCalendar(c, defaults));
-  return { calendars };
+  const result: Config = { calendars };
+  if (validated.brandColor !== undefined) result.brandColor = validated.brandColor;
+  if (validated.logoUrl !== undefined) result.logoUrl = validated.logoUrl;
+  return result;
 }
 
 export function loadConfig(path: string): Config {
