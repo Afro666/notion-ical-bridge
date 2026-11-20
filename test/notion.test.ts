@@ -284,6 +284,25 @@ describe('pageToEvent', () => {
     expect(event).not.toHaveProperty('end');
   });
 
+  it('reads the URL from a rich_text property when it is an http(s) link', () => {
+    const cal = makeCalendar({ urlProperty: 'Link' });
+    const mk = (text: string) => ({
+      id: 'p-url',
+      properties: {
+        Name: { type: 'title', title: [{ plain_text: 'X' }] },
+        Date: {
+          type: 'date',
+          date: { start: '2026-05-02', end: null, time_zone: null },
+        },
+        Link: { type: 'rich_text', rich_text: [{ plain_text: text }] },
+      },
+    });
+    expect(pageToEvent(mk('https://example.com/a'), cal)?.url).toBe(
+      'https://example.com/a',
+    );
+    expect(pageToEvent(mk('not a link'), cal)).not.toHaveProperty('url');
+  });
+
   it('returns null when page is not an object', () => {
     expect(pageToEvent('not-a-page', makeCalendar())).toBeNull();
     expect(pageToEvent(null, makeCalendar())).toBeNull();

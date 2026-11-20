@@ -117,7 +117,7 @@ Each entry under `calendars:` accepts these fields. Defined in
 | `titleProperty` | string | Yes | Name of the Notion `title` property. |
 | `locationProperty` | string | No | Maps to `LOCATION`. |
 | `descriptionProperty` | string | No | Maps to `DESCRIPTION`. |
-| `urlProperty` | string | No | Maps to `URL`. |
+| `urlProperty` | string | No | Maps to `URL`. Reads a URL-typed property, or a rich_text property that holds one http(s) link. |
 | `filter` | object | No | Passed through verbatim to `dataSources.query` as the `filter` argument. |
 | `accessToken` | string | No | Per-calendar Notion token override. Falls back to `${NOTION_TOKEN}`. |
 | `tokens` | string[] | No | Access tokens accepted on the URL. Empty array is rejected — either omit the field (public) or supply at least one non-empty token. |
