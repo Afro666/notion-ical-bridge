@@ -137,6 +137,19 @@ export function extractUrl(prop: unknown): string | null {
   return typeof p.url === 'string' && p.url.length > 0 ? p.url : null;
 }
 
+// A rich_text cell can hold a link too. Accept it only when it is a bare
+// http(s) URL, so free text never ends up in the iCal URL field.
+function extractHttpText(prop: unknown): string | null {
+  const text = extractRichText(prop)?.trim();
+  if (!text || /\s/.test(text)) return null;
+  try {
+    const u = new URL(text);
+    return u.protocol === 'http:' || u.protocol === 'https:' ? text : null;
+  } catch {
+    return null;
+  }
+}
+
 export function pageToEvent(
   page: unknown,
   calendar: CalendarConfig,
@@ -177,7 +190,8 @@ export function pageToEvent(
   }
 
   if (calendar.urlProperty) {
-    const url = extractUrl(props[calendar.urlProperty]);
+    const raw = props[calendar.urlProperty];
+    const url = extractUrl(raw) ?? extractHttpText(raw);
     if (url) event.url = url;
   }
 
